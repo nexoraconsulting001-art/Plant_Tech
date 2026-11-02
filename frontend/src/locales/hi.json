@@ -764,5 +764,7 @@
   "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।",
   "This request was already used for another bill.": "यह अनुरोध पहले ही किसी दूसरे बिल के लिए इस्तेमाल हो चुका है।",
   "Another catalogue item already has this name.": "कैटलॉग में इस नाम का दूसरा सामान पहले से है।",
-  "Please refresh the list.": "कृपया लिस्ट रीफ़्रेश करें।"
+  "Please refresh the list.": "कृपया लिस्ट रीफ़्रेश करें।",
+  "This list has changed. Please refresh it.": "यह सूची बदल गई है। कृपया इसे फिर से खोलें।",
+  "This customer's details have been erased.": "इस ग्राहक की जानकारी मिटा दी गई है।"
 }
