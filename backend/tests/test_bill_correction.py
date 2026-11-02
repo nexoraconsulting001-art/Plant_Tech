@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import db as db_module
+from common import date_key
 from conftest import Shop
 from routers import sales
 
@@ -212,3 +213,50 @@ def test_printed_and_public_bill_marks(client):
     assert "CANCELLED" in public and f"Replaced by {new['invoice_number']}" in public
     page = shop.get(f"/api/invoices/{new['id']}/html").text
     assert f"Replaces {old['invoice_number']}" in page and "CANCELLED" not in page and "PAID · Cash" in page
+
+
+def test_correction_stays_on_the_day_of_the_sale(client):
+    """Made on Monday, corrected on Thursday: Monday keeps the sale, Thursday gets nothing."""
+    shop = Shop(client)
+    rose = shop.product("Rose", 100, 10)
+    old = _bill(shop, [_line(rose, 5)])
+    sold = (datetime.now(timezone.utc) - timedelta(days=3)).replace(hour=6, minute=0, second=0, microsecond=0)  # 11:30 India time
+    monday, today = date_key(sold), date_key()
+    _set({"id": old["id"]}, {"$set": {"created_at": sold.isoformat(), "date_key": monday}})
+
+    r = shop.post(f"/api/invoices/{old['id']}/correct", {"items": [_line(rose, 4)], "customer_id": old["customer_id"]})
+    assert r.status_code == 200, r.text
+    new = r.json()
+    assert new["date_key"] == monday and new["first_billed_at"] == sold.isoformat()
+    assert new["created_at"] > sold.isoformat()  # when the corrected bill was made
+
+    assert shop.get(f"/api/invoices/summary?day={monday}").json() == {
+        "orders": 1, "sales": 400, "by_method": {"Cash": 400, "UPI": 0, "Card": 0}, "by_day": {monday: {"orders": 1, "sales": 400}}}
+    assert shop.get(f"/api/invoices/summary?day={today}").json()["orders"] == 0
+    assert shop.get("/api/dashboard/today").json()["sales"] == 0
+    report = shop.get(f"/api/reports/sales?range=day&date={monday}").json()
+    assert report["sales"] == 400 and report["buckets"][1]["sales"] == 400  # 10am-12pm, when it was sold
+    assert shop.get("/api/reports/sales?range=day").json()["sales"] == 0
+    people = shop.get(f"/api/reports/employees?range=day&date={monday}").json()
+    assert people["sales"] == 400 and people["people"][0]["first_at"] == sold.isoformat()
+    assert shop.get("/api/reports/employees?range=day").json()["sales"] == 0
+
+    # correcting the correction: still Monday
+    again = shop.post(f"/api/invoices/{new['id']}/correct", {"items": [_line(rose, 3)], "customer_id": old["customer_id"]}).json()
+    assert again["date_key"] == monday and again["first_billed_at"] == sold.isoformat()
+
+
+def test_demo_refresh_moves_correction_times_too(client):
+    import demo_data
+
+    shop = Shop(client)
+    rose = shop.product("Rose", 100, 10)
+    old = _bill(shop, [_line(rose, 2)])
+    new = shop.post(f"/api/invoices/{old['id']}/correct", {"items": [_line(rose, 1)], "customer_id": old["customer_id"]}).json()
+    cancelled_at = shop.get(f"/api/invoices/{old['id']}").json()["cancelled_at"]
+    asyncio.run(demo_data.shift_dates(db_module.state.db, old["business_id"], 2))
+    moved = lambda iso: (datetime.fromisoformat(iso) + timedelta(days=2)).isoformat()  # noqa: E731
+    was, now = shop.get(f"/api/invoices/{old['id']}").json(), shop.get(f"/api/invoices/{new['id']}").json()
+    assert was["cancelled_at"] == moved(cancelled_at)
+    assert now["first_billed_at"] == moved(new["first_billed_at"]) and now["created_at"] == moved(new["created_at"])
+    assert now["correct_until"] == moved(new["correct_until"])

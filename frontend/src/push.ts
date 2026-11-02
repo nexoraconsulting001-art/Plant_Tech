@@ -21,6 +21,7 @@ const TOKEN_KEY = "nurserypos_push_token_v1"; // the token this phone signed up,
 const ASKED_KEY = "nurserypos_push_asked_v1"; // asked once by itself; after that only from More → Notifications
 
 export type PushState = "on" | "off" | "unavailable";
+let removing: Promise<void> = Promise.resolve(); // a sign-up waits for a removal still on its way
 
 if (NATIVE) {
   Notifications.setNotificationHandler({
@@ -53,6 +54,7 @@ export async function registerPush(ask: boolean): Promise<PushState> {
     if (status !== "granted") return "off";
     const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
     const { data } = await Notifications.getExpoPushTokenAsync({ projectId });
+    await removing; // the owner logged out and straight back in: the removal must not land after this
     await apiPost("/push-tokens", { token: data, lang: i18n.language === "hi" ? "hi" : "en", platform: Platform.OS });
     await storage.setItem(TOKEN_KEY, data);
     return "on";
@@ -62,13 +64,17 @@ export async function registerPush(ask: boolean): Promise<PushState> {
 }
 
 // Stop this phone's notifications (logging out, or someone other than an owner logged in on it).
-// The saved token is forgotten first, so a failing request (expired login) is never repeated.
+// The server needs no login for this (an expired login still logs out). The saved token is forgotten only
+// once the server has removed it: offline, the next login tries again (syncPush). Logging out never waits.
 export async function unregisterPush() {
   if (!NATIVE) return;
   const token = await storage.getItem<string | null>(TOKEN_KEY, null);
   if (!token) return;
-  await storage.removeItem(TOKEN_KEY);
-  apiPost("/push-tokens/remove", { token }).catch(() => {});
+  removing = apiPost("/push-tokens/remove", { token })
+    .then(async () => {
+      await storage.removeItem(TOKEN_KEY);
+    })
+    .catch(() => {});
 }
 
 // After login, and when the language changes: owners sign the phone up, anyone else takes it off.

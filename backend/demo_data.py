@@ -305,9 +305,10 @@ def _later(iso: str | None, days: int) -> str | None:
 async def shift_dates(db, business_id: str, days: int) -> int:
     """Move every date in the shop `days` forward: bills, stock history, customers, products, supplier bills."""
     moved = 0
-    async for inv in db.invoices.find({"business_id": business_id}, {"_id": 0, "id": 1, "created_at": 1, "date_key": 1}):
+    times = ("created_at", "first_billed_at", "cancelled_at")  # the last two: corrected or cancelled bills
+    async for inv in db.invoices.find({"business_id": business_id}, {"_id": 0, "id": 1, "date_key": 1, **{f: 1 for f in times}}):
         day = (date.fromisoformat(inv["date_key"]) + timedelta(days=days)).isoformat()
-        await db.invoices.update_one({"id": inv["id"]}, {"$set": {"date_key": day, "created_at": _later(inv["created_at"], days)}})
+        await db.invoices.update_one({"id": inv["id"]}, {"$set": {"date_key": day, **{f: _later(inv[f], days) for f in times if inv.get(f)}}})
         moved += 1
     for coll, fields in (("stock_history", ("created_at",)), ("customers", ("created_at", "last_purchase_at")),
                          ("products", ("created_at", "updated_at")), ("purchases", ("created_at",))):

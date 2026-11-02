@@ -1,6 +1,9 @@
 """Saved orders, one per customer: a worker can start Kavita's order, bill Rahul meanwhile, and Kavita's
 items are still there when anyone in the shop enters her number again. Not listed anywhere; making her
-bill or discarding her order removes it, and one untouched for 7 days is dropped."""
+bill or discarding her order removes it, and one untouched for 7 days is dropped.
+
+A product line's unit is always the product's own (as on the bill), whatever the app sent: older apps send none,
+and the owner may change a product's unit while an order waits. Loose lines keep the unit they were added with."""
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -39,6 +42,16 @@ async def clear(db, business_id: str, customer_id: str | None):
         await db.carts.delete_many({"business_id": business_id, "customer_id": customer_id})
 
 
+async def _product_units(db, business_id: str, product_ids: list[str]) -> dict[str, str]:
+    """product id -> its unit now, for the product lines (not loose-…) of a saved order."""
+    ids = list({pid for pid in product_ids if pid and not pid.startswith("loose-")})
+    if not ids:
+        return {}
+    rows = await db.products.find({"business_id": business_id, "id": {"$in": ids}},
+                                  {"_id": 0, "id": 1, "unit": 1}).to_list(len(ids))
+    return {p["id"]: unit_of(p.get("unit")) for p in rows}
+
+
 async def _own_customer(db, business_id: str, customer_id: str):
     if not await db.customers.find_one({"id": customer_id, "business_id": business_id}, {"_id": 1}):
         raise HTTPException(400, "Customer not found.")
@@ -53,7 +66,10 @@ async def get_cart(customer_id: str = Query(min_length=1), user: dict = Depends(
     if datetime.fromisoformat(c["updated_at"]) < datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS):
         await clear(db, user["business_id"], customer_id)
         return None
-    return {"items": c.get("items", []), "discount": c.get("discount", 0), "gst_removed": c.get("gst_removed", False),
+    items = c.get("items", [])
+    units = await _product_units(db, user["business_id"], [i.get("product_id") or "" for i in items])
+    items = [{**i, "unit": units[i["product_id"]]} if i.get("product_id") in units else i for i in items]
+    return {"items": items, "discount": c.get("discount", 0), "gst_removed": c.get("gst_removed", False),
             "updated_at": c["updated_at"]}
 
 
@@ -64,9 +80,10 @@ async def save_cart(body: CartIn, user: dict = Depends(auth.require("sell"))):
     if not body.items:
         await clear(db, user["business_id"], body.customer_id)
         return None
+    units = await _product_units(db, user["business_id"], [i.product_id for i in body.items])
     for i in body.items:
+        i.unit = units.get(i.product_id) or unit_of(i.unit)  # a deleted product keeps what the app sent
         check_quantity(i.unit, i.quantity, i.name)
-        i.unit = unit_of(i.unit)
     doc = {"business_id": user["business_id"], "customer_id": body.customer_id,
            "items": [i.model_dump() for i in body.items], "discount": body.discount, "gst_removed": body.gst_removed,
            "updated_at": now_iso(),

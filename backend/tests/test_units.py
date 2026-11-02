@@ -91,3 +91,63 @@ def test_bill_products_and_identified_plants(client, claude):
     made = [p for p in shop.get("/api/products").json() if p["name"] == "Cocopeat"][0]
     assert made["unit"] == "pcs"
     assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()["kind"] == "plant"
+
+
+def test_decimal_stock_stays_on_three_decimals(client):
+    """0.7 - 0.4 is 0.29999999999999993 in floating point: the last 0.3 kg must still sell, and leave exactly 0."""
+    import asyncio
+    import db as db_module
+
+    shop = Shop(client, gst=False)
+    _, worker = shop.worker()
+    soil = shop.product("Red Soil", 40, 0.7, category="Pots", unit="kg")
+    line = lambda q: {"product_id": soil["id"], "name": "Red Soil", "quantity": q, "price": 40}  # noqa: E731
+    sell = lambda q: client.post("/api/invoices", headers=worker, json={  # noqa: E731
+        "items": [line(q)], "customer_phone": "9811100099", "customer_name": "Test"})
+    assert sell(0.4).status_code == 200
+    assert shop.get(f"/api/products/{soil['id']}").json()["stock"] == 0.3
+    r = sell(0.3)
+    assert r.status_code == 200, r.text
+    assert "short_qty" not in r.json()["items"][0]
+    p = shop.get(f"/api/products/{soil['id']}").json()
+    assert p["stock"] == 0 and p["history"][0]["new_stock"] == 0
+    assert shop.get("/api/dashboard/today").json()["below_zero"] == []
+
+    # by hand and from a supplier bill too
+    assert shop.post(f"/api/products/{soil['id']}/stock", {"change": 0.7}).json()["stock"] == 0.7
+    assert shop.post(f"/api/products/{soil['id']}/stock", {"change": -0.4}).json()["stock"] == 0.3
+    assert shop.post("/api/purchases", {"supplier": "Green Farms", "items": [
+        {"product_id": soil["id"], "name": "Red Soil", "quantity": 0.1, "purchase_price": 20}]}).status_code == 200
+    assert shop.get(f"/api/products/{soil['id']}").json()["stock"] == 0.4
+
+    # stock saved unrounded before this fix still sells in full
+    asyncio.run(db_module.state.db.products.update_one({"id": soil["id"]}, {"$set": {"stock": 0.7 - 0.4}}))
+    assert sell(0.3).status_code == 200
+    assert shop.get(f"/api/products/{soil['id']}").json()["stock"] == 0
+    assert sell(0.001).json()["code"] == "out_of_stock"
+
+
+def test_saved_order_takes_the_products_unit(client):
+    """Older apps send no unit, and a product's unit may change while its order waits: the product's unit counts."""
+    shop = Shop(client)
+    soil = shop.product("Potting Soil", 40, 50, category="Pots", unit="kg")
+    pot = shop.product("Clay Pot", 100, 5, category="Pots")
+    kavita = shop.post("/api/customers", {"name": "Kavita", "phone": "9811122334"}).json()
+    put = lambda items: client.put("/api/orders/cart", headers=shop.h,  # noqa: E731
+                                   json={"customer_id": kavita["id"], "items": items})
+    get = lambda: shop.get("/api/orders/cart", params={"customer_id": kavita["id"]}).json()  # noqa: E731
+    line = lambda p, q, **kw: {"product_id": p["id"], "name": p["name"], "quantity": q, "price": p["selling_price"], **kw}  # noqa: E731
+
+    r = put([line(soil, 2), line(pot, 1, unit="kg"), line({"id": "loose-1", "name": "Twine", "selling_price": 5}, 1.5, unit="metre")])
+    assert r.status_code == 200, r.text
+    assert [i["unit"] for i in r.json()["items"]] == ["kg", "pcs", "metre"]  # the app's word does not count for products
+    assert put([line(soil, 1.5)]).status_code == 200
+    assert put([line(pot, 1.5, unit="kg")]).json()["code"] == "whole_quantity"
+
+    # saved before units existed (no unit), then the owner switches the product to litre
+    import asyncio
+    import db as db_module
+    asyncio.run(db_module.state.db.carts.update_many({}, {"$set": {"items": [line(soil, 2)]}}))
+    assert get()["items"][0]["unit"] == "kg"
+    client.put(f"/api/products/{soil['id']}", headers=shop.h, json={"unit": "litre"})
+    assert get()["items"][0]["unit"] == "litre"

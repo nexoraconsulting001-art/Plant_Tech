@@ -13,7 +13,7 @@ from db import get_db
 from errors import AppError
 from routers import library, suppliers
 from routers.business import DEFAULT_PROFIT_PERCENT
-from routers.products import record_stock
+from routers.products import record_stock, settle_stock
 
 router = APIRouter(prefix="/api/purchases", tags=["purchases"])
 MAX_PAGES = 5
@@ -79,6 +79,7 @@ async def create_purchase(body: PurchaseIn, user: dict = Depends(auth.require("s
                                                       return_document=ReturnDocument.AFTER)
             if not p:
                 raise AppError(400, "{{name}} is no longer in your products.", "product_missing", name=it.name)
+            p = await settle_stock(db, p)
             await record_stock(db, user, p, it.quantity, p["stock"], "purchase", f"Supplier bill {body.invoice_number}")
         else:
             count = await db.products.count_documents({"business_id": bid})

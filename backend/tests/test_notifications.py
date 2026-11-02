@@ -230,3 +230,26 @@ def test_deliver_never_raises(monkeypatch):
 
     monkeypatch.setattr(push, "send", down)
     _run(push.deliver(AsyncMongoMockClient()["push"], [{"to": TOKEN}]))  # logged, not raised
+
+
+def test_a_phone_is_removed_without_a_valid_login(client):
+    """Logging out after the login expired or was ended elsewhere still takes the phone off."""
+    shop = Shop(client)
+    _sign_up(shop)
+    _sign_up(shop, TOKEN2)
+    assert client.post("/api/push-tokens/remove", headers={"Authorization": "Bearer expired"}, json={"token": TOKEN}).status_code == 200
+    assert client.post("/api/push-tokens/remove", json={"token": TOKEN2}).status_code == 200
+    assert shop.get("/api/notifications/settings").json()["phones"] == 0
+    assert client.post("/api/push-tokens/remove", json={"token": "x" * 301}).status_code == 422
+
+
+def test_new_password_forgets_the_owners_phones(client, sent):
+    shop = Shop(client)
+    _sign_up(shop)
+    _sign_up(shop, TOKEN2)
+    r = shop.post("/api/auth/password", {"current_password": "secret123", "new_password": "newsecret123"})
+    assert r.status_code == 200, r.text
+    shop.h = {"Authorization": f"Bearer {r.json()['token']}"}
+    assert shop.get("/api/notifications/settings").json()["phones"] == 0
+    _sign_up(shop)  # the phone the password was changed on signs up again
+    assert shop.get("/api/notifications/settings").json()["phones"] == 1

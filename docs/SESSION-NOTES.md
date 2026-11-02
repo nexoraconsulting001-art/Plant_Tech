@@ -34,6 +34,7 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
   - **Current QA build: 1.1.0 (versionCode 2), EAS build `50a49b3b-4d1f-442d-8da0-b49ddf364d04`, built 18 Oct 2026 from d37d61f** after the owner's browser go. APK: https://expo.dev/artifacts/eas/-5E0RBUTgsR_KA61vnKF033F5yPUIQ4OT78eih41k_w.apk (shared as a link; Expo keeps artifacts only for a limited time, so rebuild if it expires).
   - It installs over the old QA app and keeps the login (same app ID and keystore).
   - **OTA updates:** runtime is `appVersion`, so updates to channel `staging` now reach only 1.1.0 phones. Still no OTA or build without the owner's go.
+  - **Since the push notifications commit (Nov) the app is 1.2.0 (versionCode 3):** it adds native modules, so its updates must never reach 1.1.0 phones. The next QA step is a 1.2.0 build, not an OTA.
   - **How to build:** `npx eas-cli@latest build --profile staging --platform android --non-interactive --no-wait` from `frontend/` (logged in as the owner's Expo account; run it from PowerShell, the Bash sandbox blocks network).
 - **Backend tests:** pytest with mongomock (67 passing).
 - **App checks:** `npx tsc --noEmit`, `npx eslint app src` (warnings only, no errors) and `npm run i18n:check`. The package manager is yarn 1 (`npx yarn@1.22.22 add …`; `npx expo install` fails without yarn on PATH).

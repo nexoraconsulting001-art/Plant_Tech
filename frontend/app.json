@@ -3,7 +3,7 @@
     "name": "Hara Hisaab",
     "slug": "nurserypos",
     "owner": "shashank_jindal",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "nurserypos",
@@ -29,7 +29,7 @@
         "backgroundColor": "#1B5E3B"
       },
       "package": "com.planteck.nurserypos",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": ["android.permission.CAMERA"],
       "blockedPermissions": ["android.permission.RECORD_AUDIO"]
     },

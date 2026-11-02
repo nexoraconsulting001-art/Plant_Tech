@@ -36,7 +36,7 @@ from db import get_db
 from errors import AppError
 from routers import carts
 from routers.business import shop_upis
-from routers.products import context, record_stock
+from routers.products import STOCK_EPS, context, record_stock, settle_stock
 from units import check_quantity, count, unit_of
 
 router = APIRouter(prefix="/api", tags=["sales"])
@@ -194,7 +194,7 @@ class StockMove:
             delta = round(qty - back, 3)
             q = {"id": pid, "business_id": self.user["business_id"]}
             if delta > 0 and not allow_short:
-                q["stock"] = {"$gte": delta}
+                q["stock"] = {"$gte": delta - STOCK_EPS}
             # BEFORE: the filter is checked on the stock before the sale (mongomock re-checks it on AFTER)
             found = await self.db.products.find_one_and_update(q, {"$inc": {"stock": -delta}}, projection={"_id": 0},
                                                                return_document=ReturnDocument.BEFORE)
@@ -206,6 +206,7 @@ class StockMove:
                 raise AppError(400, "Only {{n}} {{name}} left in stock.", "out_of_stock",
                                n=f"{round(have.get('stock', 0) + back, 3):g}", name=(names or {}).get(pid, ""))
             self.done.append((found, delta))
+            await settle_stock(self.db, {"id": pid, "stock": found.get("stock", 0) - delta})  # what $inc left
             before = found.get("stock", 0) + back  # as if this bill's old quantity were back on the shelf first
             if qty and (missing_qty := round(qty - min(max(before, 0), qty), 3)):
                 short[pid] = missing_qty
@@ -213,13 +214,17 @@ class StockMove:
 
     async def undo(self):
         for found, delta in reversed(self.done):
-            await self.db.products.update_one({"id": found["id"]}, {"$inc": {"stock": delta}})
+            p = await self.db.products.find_one_and_update({"id": found["id"]}, {"$inc": {"stock": delta}},
+                                                           projection={"_id": 0, "id": 1, "stock": 1},
+                                                           return_document=ReturnDocument.AFTER)
+            if p:
+                await settle_stock(self.db, p)
         self.done = []
 
     async def record(self, kind: str, reason: str = "", bill: str = ""):
         for found, delta in self.done:
             if delta:
-                after = round(found.get("stock", 0) - delta, 3)
+                after = round(found.get("stock", 0) - delta, 3) or 0.0
                 await record_stock(self.db, self.user, {**found, "stock": after}, -delta, after, kind, reason, bill=bill)
 
 
@@ -293,6 +298,8 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
 # the customer's totals and every report. Correcting does that and makes the new bill, with a new number, in one
 # call; the two are linked both ways (replaced_by / replaces). Both are allowed for CORRECT_DAYS after the bill was
 # first made: a replacement keeps the first bill's time (first_billed_at), so correcting again never adds time.
+# It also keeps the day of the sale (date_key): a bill made on Monday and corrected on Thursday still counts in
+# Monday's sales, reports and summary; its created_at is when the corrected bill was made.
 CORRECT_DAYS = 7
 
 
@@ -377,7 +384,8 @@ async def correct_invoice(invoice_id: str, body: CorrectIn, owner: dict = Depend
         short = await move.take(_quantities(body.items), bill.allow_short, give_back=_quantities(old.get("items", [])),
                                 names={pid: p["name"] for pid, p in bill.products.items()})
         invoice = await _save(db, owner, body, bill, short, replaces={"id": old["id"], "invoice_number": old["invoice_number"]},
-                              first_billed_at=_first_billed(old), corrected_by=me, created_by=old.get("created_by") or me)
+                              first_billed_at=_first_billed(old), date_key=old.get("date_key") or date_key(),
+                              corrected_by=me, created_by=old.get("created_by") or me)
     except Exception:
         await move.undo()
         await _unmark_cancelled(db, old)
@@ -573,7 +581,7 @@ def _report_buckets(range_: str, anchor: date) -> tuple[list[str], list[str], ca
         labels = ["8am", "10am", "12pm", "2pm", "4pm", "6pm", "8pm"]
 
         def idx(inv):
-            hour = datetime.fromisoformat(inv["created_at"]).astimezone(IST).hour
+            hour = datetime.fromisoformat(_first_billed(inv)).astimezone(IST).hour  # a corrected bill: when it was sold
             return min(max((hour - 8) // 2, 0), len(labels) - 1)
         return [anchor.isoformat()], labels, idx
     if range_ == "week":
@@ -631,7 +639,7 @@ async def employees_report(range: Literal["day", "week", "month"] = "day",  # no
     anchor = datetime.strptime(on, "%Y-%m-%d").date() if on else now_ist().date()
     keys, _, _ = _report_buckets(range, anchor)
     invs = await db.invoices.find({"business_id": bid, **LIVE, "date_key": {"$in": keys}},
-                                  {"_id": 0, "grand_total": 1, "discount": 1, "created_at": 1, "created_by": 1,
+                                  {"_id": 0, "grand_total": 1, "discount": 1, "created_at": 1, "first_billed_at": 1, "created_by": 1,
                                    "customer_id": 1, "items.quantity": 1, "items.unit": 1, "items.price": 1,
                                    "items.list_price": 1}).to_list(50000)
     users = await db.users.find({"business_id": bid, "role": {"$in": ["owner", "worker"]}},
@@ -658,8 +666,9 @@ async def employees_report(range: Literal["day", "week", "month"] = "day",  # no
         r["discount"] += inv.get("discount", 0)
         if inv.get("customer_id"):
             r["customers"].add(inv["customer_id"])
-        r["first_at"] = min(x for x in (r["first_at"], inv["created_at"]) if x)
-        r["last_at"] = max(x for x in (r["last_at"], inv["created_at"]) if x)
+        sold = _first_billed(inv)  # a corrected bill counts at the time of the sale, like its day
+        r["first_at"] = min(x for x in (r["first_at"], sold) if x)
+        r["last_at"] = max(x for x in (r["last_at"], sold) if x)
         for it in inv.get("items", []):
             r["items"] += count(it)
             if it.get("list_price") is not None:

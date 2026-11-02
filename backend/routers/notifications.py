@@ -2,8 +2,10 @@
 
 A phone's Expo push token is kept once (`push_tokens`, unique by token) and belongs to the owner who last
 signed it up, with the app language on that phone. Only owners can sign a phone up. Removing a token needs
-any login, because holding the token proves it is this phone: an employee or another shop logging in on a
-phone an owner used stops that owner's notifications there. What is sent is in notify.py, how in push.py.
+no login, because holding the token proves it is this phone: logging out works even when the login has
+expired or was ended on another phone, and an employee or another shop logging in on a phone an owner used
+stops that owner's notifications there. A new password (or an employee switched off) forgets all of that
+person's phones; the phone the owner changed it on signs up again. What is sent is in notify.py, how in push.py.
 """
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -52,9 +54,15 @@ async def add_token(body: TokenIn, owner: dict = Depends(auth.require("owner")))
 
 
 @router.post("/push-tokens/remove")
-async def remove_token(body: TokenOut, _user: dict = Depends(auth.current_user)):
+async def remove_token(body: TokenOut):
+    """No login needed (older apps send theirs; it is not checked)."""
     await get_db().push_tokens.delete_many({"token": body.token})
     return {"ok": True}
+
+
+async def forget_phones(db, user_id: str):
+    """Logged out everywhere (new password, employee switched off): none of their phones get notifications."""
+    await db.push_tokens.delete_many({"user_id": user_id})
 
 
 async def _settings_view(db, owner: dict) -> dict:

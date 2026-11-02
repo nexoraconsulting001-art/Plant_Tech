@@ -15,7 +15,7 @@ import { useTranslation } from "react-i18next";
 import { ApiError, apiGet, apiPost, uploadImage } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useCart } from "@/src/cart-context";
-import { DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer";
+import { CorrectionBanner, DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer";
 import { CategoryPicker } from "@/src/components/category-picker";
 import { choose, confirm, notice } from "@/src/confirm";
 import { useToast } from "@/src/components/toast";
@@ -136,7 +136,10 @@ function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch }: {
   return (
     <Screen bg={colors.surface}>
       <Header title={t("Add items")} close onBack={() => router.back()} testID="scan-close" right={<DiscardOrder />} />
-      <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md }}><OrderCustomerBar /></View>
+      <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.md }}>
+        <OrderCustomerBar />
+        <CorrectionBanner />
+      </View>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: spacing.lg }}>
         {!query && (
           <>

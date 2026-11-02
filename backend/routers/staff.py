@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 import auth
 from common import new_id, normalize_in_phone, now_iso
 from db import get_db
+from routers import notifications
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -83,4 +84,6 @@ async def update_staff(worker_id: str, body: StaffPatch, owner: dict = Depends(a
         update["token_version"] = worker.get("token_version", 0) + 1
     if update:
         await db.users.update_one({"id": worker_id}, {"$set": update})
+    if logout:
+        await notifications.forget_phones(db, worker_id)
     return _view({**worker, **update})

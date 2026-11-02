@@ -53,6 +53,20 @@ class StockIn(BaseModel):
     reason: str = Field("Added", max_length=80)
 
 
+STOCK_EPS = 1e-9  # "enough stock" allows for float noise in stock saved before settle_stock existed
+
+
+async def settle_stock(db, product: dict) -> dict:
+    """Keep stock on 3 decimals after a change ($inc). 0.7 kg less 0.4 is 0.29999999999999993 in floating point:
+    unrounded, the last 0.3 kg could not be sold and selling it would leave a tiny stock below zero. Rounds only
+    if nothing changed the stock since (another sale settles its own result). Returns the product as rounded."""
+    raw = product.get("stock", 0)
+    exact = round(raw, 3) or 0.0  # no -0.0
+    if exact != raw:
+        await db.products.update_one({"id": product["id"], "stock": raw}, {"$set": {"stock": exact}})
+    return {**product, "stock": exact}
+
+
 async def record_stock(db, user: dict, product: dict, change: float, new_stock: float, kind: str, reason: str = "",
                        bill: str = ""):
     """kind: initial, sale, adjustment, purchase, bill_cancel or bill_correct (`bill` = the bill's number for these two)."""
@@ -236,11 +250,13 @@ async def adjust_stock(product_id: str, body: StockIn, user: dict = Depends(auth
     await get_owned(db, user, product_id)
     q = {"id": product_id, "business_id": user["business_id"]}
     if body.change < 0:
-        q["stock"] = {"$gte": -body.change}
-    p = await db.products.find_one_and_update(q, {"$inc": {"stock": body.change}},
-                                              projection={"_id": 0}, return_document=ReturnDocument.AFTER)
-    if not p:
+        q["stock"] = {"$gte": -body.change - STOCK_EPS}
+    # BEFORE: the filter is checked on the stock before the change (mongomock re-checks it on AFTER)
+    was = await db.products.find_one_and_update(q, {"$inc": {"stock": body.change}},
+                                                projection={"_id": 0}, return_document=ReturnDocument.BEFORE)
+    if not was:
         raise HTTPException(400, "You cannot remove more than the stock on hand.")
+    p = await settle_stock(db, {**was, "stock": was.get("stock", 0) + body.change})  # what $inc left, on 3 decimals
     await record_stock(db, user, p, body.change, p["stock"], "adjustment", body.reason)
     return (await views(db, user, [p]))[0]
 

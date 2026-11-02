@@ -105,6 +105,12 @@ export default function Bill() {
 
   const open = (b: BillRef) => router.push({ pathname: "/bill/[id]", params: { id: b.id } });
 
+  // A fresh order, like Home: a correction left open with Back (not Stop) must not become the next order.
+  const nextOrder = () => {
+    cart.startNew();
+    router.replace("/order/customer");
+  };
+
   if (!inv) {
     return (
       <Screen bg={colors.surface}>
@@ -255,7 +261,7 @@ export default function Bill() {
       </ScrollView>
       {justPaid && (
         <BottomBar>
-          <Button title={t("Next order")} icon="cart-plus" onPress={() => router.replace("/order/scan")} testID="bill-next" />
+          <Button title={t("Next order")} icon="cart-plus" onPress={nextOrder} testID="bill-next" />
           <Button title={t("Back to home")} variant="outline" size="md" onPress={home} testID="bill-home" />
         </BottomBar>
       )}

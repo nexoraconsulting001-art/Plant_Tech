@@ -1,4 +1,5 @@
-// Change your own password (owner, 8+ characters) or PIN (worker, 4+). Logs out your other phones.
+// Change your own password (owner, 8+ characters) or PIN (worker, 4+). Logs out your other phones (and takes
+// them off the owner's notifications).
 import { useState } from "react";
 import { useRouter } from "expo-router";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -6,6 +7,7 @@ import { useTranslation } from "react-i18next";
 
 import { apiPost } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { syncPush } from "@/src/push";
 import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, Field, Header, Screen, T } from "@/src/components/ui";
 import { colors, spacing } from "@/src/theme";
@@ -27,6 +29,7 @@ export default function ChangePassword() {
     setBusy(true);
     try {
       await setSession(await apiPost("/auth/password", { current_password: current, new_password: next }));
+      syncPush(isOwner); // a new password takes all of the owner's phones off notifications; this one signs up again
       toast.show(t("Updated. You have been logged out on your other phones."), "success");
       router.back();
     } catch (e: any) {

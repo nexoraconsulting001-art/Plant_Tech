@@ -14,7 +14,9 @@ the owner, in their own Google and Expo accounts. Keys stay in those accounts: n
 - **Phones without notifications:** a phone with the current QA app (1.1.0), or a new build without Firebase,
   simply gets no notifications. Nothing breaks.
 - **New app build needed:** notifications need a new APK, because `expo-notifications` is native code. An
-  over-the-air update is not enough.
+  over-the-air update is not enough. The app version is therefore **1.2.0** (versionCode 3): updates from this
+  code only reach 1.2.0 builds. Sent to a 1.1.0 phone it would crash on start (the native module is missing),
+  so 1.1.0 phones get nothing more over the air; testers install the 1.2.0 APK.
 
 ## 1. Firebase (Android delivery, free)
 1. Go to https://console.firebase.google.com and create a project, e.g. "Hara Hisaab". Google Analytics is not

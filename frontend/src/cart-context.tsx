@@ -123,7 +123,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   async function load(c: OrderCustomer): Promise<Saved> {
     try {
       const s = await apiGet(`/orders/cart?customer_id=${encodeURIComponent(c.id)}`);
-      return s ? { items: s.items ?? [], discount: s.discount ?? 0, gstRemoved: !!s.gst_removed } : null;
+      // the server gives each product line the product's unit now: a quantity saved as 1.5 of what is now
+      // counted in pieces is rounded, so the next save is not refused
+      const items: CartItem[] = (s?.items ?? []).map((i: CartItem) => ({ ...i, quantity: fitQty(i, i.quantity) }));
+      return s ? { items, discount: s.discount ?? 0, gstRemoved: !!s.gst_removed } : null;
     } catch {
       return null; // offline: start empty; it is saved when it next changes
     }

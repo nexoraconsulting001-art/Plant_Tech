@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 import auth
 from common import new_id, normalize_in_phone, now_iso
 from db import get_db
+from routers import notifications
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -123,5 +124,6 @@ async def change_password(body: PasswordIn, user: dict = Depends(auth.current_us
     tv = user.get("token_version", 0) + 1
     await db.users.update_one({"id": user["id"]},
                               {"$set": {"password_hash": auth.hash_password(body.new_password), "token_version": tv}})
+    await notifications.forget_phones(db, user["id"])  # this phone signs up again (the app does that after this)
     user = {**user, "token_version": tv, "password_hash": "set"}
     return await _session(db, user)
