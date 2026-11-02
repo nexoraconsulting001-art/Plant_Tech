@@ -2,12 +2,13 @@
 
 A supplier is the same one when the GSTIN matches, else the phone, else the name ("M/s Green Farms
 Pvt. Ltd." is "Green Farms"). A supplier bill only fills in details the record is missing; it never
-overwrites what the owner typed. Bill count, total and last bill come from the purchases, so they
-can't drift. Notes hold anything else (contact person, bank or UPI details, payment terms).
+overwrites what the owner typed. Bill count, total and last bill are counted from the purchases by the
+database (`_stats`), so they can't drift. Notes hold anything else (contact person, bank or UPI details, payment terms).
 """
+import inspect
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import auth
@@ -131,15 +132,18 @@ def view(s: dict, stats: dict | None = None) -> dict:
             "bills": stats.get("bills", 0), "total": round(stats.get("total", 0), 2), "last_bill_at": stats.get("last")}
 
 
-async def _stats(db, business_id: str) -> dict:
-    out: dict = {}
-    async for p in db.purchases.find({"business_id": business_id, "supplier_id": {"$ne": None}},
-                                     {"_id": 0, "supplier_id": 1, "total": 1, "created_at": 1}):
-        s = out.setdefault(p["supplier_id"], {"bills": 0, "total": 0.0, "last": None})
-        s["bills"] += 1
-        s["total"] += p.get("total") or 0
-        s["last"] = max(s["last"] or "", p.get("created_at") or "") or None
-    return out
+async def _stats(db, business_id: str, supplier_id: str | None = None) -> dict:
+    """supplier id -> {bills, total, last}, counted by the database (index {business_id, supplier_id, created_at});
+    one supplier's only when `supplier_id` is given."""
+    match = {"business_id": business_id, "supplier_id": supplier_id if supplier_id else {"$ne": None}}
+    rows = db.purchases.aggregate([
+        {"$match": match},
+        {"$group": {"_id": "$supplier_id", "bills": {"$sum": 1}, "total": {"$sum": {"$ifNull": ["$total", 0]}},
+                    "last": {"$max": "$created_at"}}},
+    ])
+    if inspect.isawaitable(rows):  # PyMongo's async client; the in-memory dev database hands back the cursor itself
+        rows = await rows
+    return {r["_id"]: {"bills": r["bills"], "total": r["total"], "last": r["last"] or None} async for r in rows}
 
 
 async def _get(db, business_id: str, supplier_id: str) -> dict:
@@ -186,7 +190,7 @@ async def get_supplier(supplier_id: str, user: dict = Depends(auth.require("stoc
     s = await _get(db, user["business_id"], supplier_id)
     bills = await db.purchases.find({"business_id": user["business_id"], "supplier_id": supplier_id}, {"_id": 0}
                                     ).sort("created_at", -1).to_list(500)
-    stats = (await _stats(db, user["business_id"])).get(supplier_id)
+    stats = (await _stats(db, user["business_id"], supplier_id)).get(supplier_id)
     from routers.purchases import shown  # one shape for a bill everywhere
     return {**view(s, stats), "purchases": [shown(b) for b in bills]}
 
@@ -206,7 +210,7 @@ async def update_supplier(supplier_id: str, body: SupplierPatch, owner: dict = D
     await db.suppliers.update_one({"id": supplier_id}, {"$set": update})
     if "name" in update and update["name"] != s["name"]:
         await db.purchases.update_many({"business_id": bid, "supplier_id": supplier_id}, {"$set": {"supplier": update["name"]}})
-    return view({**s, **update}, (await _stats(db, bid)).get(supplier_id))
+    return view({**s, **update}, (await _stats(db, bid, supplier_id)).get(supplier_id))
 
 
 @router.delete("/{supplier_id}")
