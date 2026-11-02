@@ -6,6 +6,7 @@ from datetime import datetime
 from html import escape
 
 from common import IST
+from units import short
 
 ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
         "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
@@ -77,7 +78,7 @@ def render(inv: dict, biz: dict, *, public: bool = True, logo_src: str | None = 
     rows = []
     for i, it in enumerate(inv.get("items", [])):
         qty = it["quantity"]
-        qty_s = str(int(qty)) if float(qty).is_integer() else f"{qty:g}"
+        qty_s = " ".join(x for x in (str(int(qty)) if float(qty).is_integer() else f"{qty:g}", short(it.get("unit"))) if x)
         rows.append(
             f'<tr class="{"z" if i % 2 == 0 else ""}"><td>{e(it["name"])}</td><td class="c">{qty_s}</td>'
             f'<td class="r">{inr(it["price"])}</td><td class="r b">{inr(it["price"] * qty)}</td></tr>')

@@ -18,10 +18,11 @@ import { CategoryPicker } from "@/src/components/category-picker";
 import { choose, confirm, notice } from "@/src/confirm";
 import { useToast } from "@/src/components/toast";
 import { Badge, BottomBar, Button, Field, Header, Icon, Screen, SearchBox, Segmented, Stepper, T, Thumb } from "@/src/components/ui";
-import { formatCurrency, formatQty } from "@/src/format";
+import { formatCurrency, formatQty, formatQtyUnit } from "@/src/format";
 import { CaptureResult, pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
 import { colors, radius, spacing, touch } from "@/src/theme";
 import type { Product } from "@/src/types";
+import { roundQty, unitShort, wholeUnit } from "@/src/units";
 
 type Stage =
   | { kind: "start" }
@@ -181,7 +182,7 @@ function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch }: {
               <View style={{ flex: 1 }}>
                 <T v="bold">{p.name}</T>
                 <T v="small" color={p.out_of_stock ? colors.red : colors.muted}>
-                  {p.out_of_stock ? t("Out of stock") : t("{{n}} in stock", { n: formatQty(p.stock) })}
+                  {p.out_of_stock ? t("Out of stock") : t("{{n}} in stock", { n: formatQtyUnit(p.stock, p.unit) })}
                 </T>
               </View>
               <T v="number">{formatCurrency(p.selling_price)}</T>
@@ -232,16 +233,18 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
   const cart = useCart();
   const { can } = useAuth();
   const inCart = cart.items.find((i) => i.product_id === p.id)?.quantity ?? 0;
-  const left = Math.max(0, p.stock - inCart);
-  const [qty, setQty] = useState(1);
+  const whole = wholeUnit(p.unit);
+  const left = Math.max(0, roundQty(p.stock - inCart, false));
+  const [qty, setQty] = useState(() => (whole ? 1 : Math.min(1, left) || 1)); // 0.5 kg left: start at 0.5
   const conf = confidence === "High" ? { text: t("Strong match"), tone: "green" as const }
     : confidence === "Medium" ? { text: t("Likely match"), tone: "amber" as const }
     : confidence ? { text: t("Please verify"), tone: "red" as const } : null;
 
   function add(next: "scan" | "cart", loose = false) {
     cart.addItem(loose
-      ? { product_id: `loose-${Date.now().toString(36)}`, name: p.name, price: p.selling_price, quantity: qty }
-      : { product_id: p.id, name: p.name, price: p.selling_price, quantity: qty, gst_percent: p.gst_percent, image_path: p.image_path, stock: p.stock });
+      ? { product_id: `loose-${Date.now().toString(36)}`, name: p.name, price: p.selling_price, quantity: qty, unit: p.unit }
+      : { product_id: p.id, name: p.name, price: p.selling_price, quantity: qty, gst_percent: p.gst_percent, image_path: p.image_path, stock: p.stock,
+        unit: p.unit });
     onAdded(next);
   }
 
@@ -262,18 +265,19 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
           <View style={{ flex: 1, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.page }}>
             <T v="label">{t("Price")}</T>
             <T v="title">{formatCurrency(p.selling_price)}</T>
+            {!whole && <T v="caption">{t("per {{unit}}", { unit: unitShort(p.unit) })}</T>}
           </View>
           <View style={{ flex: 1, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: left ? colors.page : "#FDECEC" }}>
             <T v="label">{t("In stock")}</T>
-            <T v="title" color={left ? colors.ink : colors.red}>{formatQty(p.stock)}</T>
-            {inCart > 0 && <T v="caption">{t("{{n}} already in this order", { n: formatQty(inCart) })}</T>}
+            <T v="title" color={left ? colors.ink : colors.red}>{formatQtyUnit(p.stock, p.unit)}</T>
+            {inCart > 0 && <T v="caption">{t("{{n}} already in this order", { n: formatQtyUnit(inCart, p.unit) })}</T>}
           </View>
         </View>
 
         {left > 0 ? (
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <T v="bodyLarge">{t("Quantity")}</T>
-            <Stepper value={qty} onChange={setQty} max={left} testID="found-qty" />
+            <Stepper value={qty} onChange={setQty} min={whole ? 1 : 0.001} max={left} decimals={!whole} unit={unitShort(p.unit)} testID="found-qty" />
           </View>
         ) : (
           <View style={{ gap: spacing.md, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.amberTint }}>
@@ -392,14 +396,14 @@ function NotInStock({ initial, photo, onBack, onAdded, onPick }: {
           placeholder="0" testID="new-price" inputStyle={{ fontSize: 24 }} />
         {mode === "save" && (
           <>
-            <Field label={t("Opening stock (including this sale)")} value={stock} onChangeText={(v) => setStock(v.replace(/[^0-9.]/g, ""))}
-              keyboardType="decimal-pad" testID="new-stock" error={!stockOk ? t("Must be at least {{n}} for this order", { n: qty }) : undefined} />
+            <Field label={t("Opening stock (including this sale)")} value={stock} onChangeText={(v) => setStock(v.replace(/\D/g, ""))}
+              keyboardType="number-pad" testID="new-stock" error={!stockOk ? t("Must be at least {{n}} for this order", { n: qty }) : undefined} />
             <CategoryPicker value={categoryId} onChange={setCategoryId} />
           </>
         )}
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <T v="bodyLarge">{t("Quantity")}</T>
-          <Stepper value={qty} onChange={setQty} testID="new-qty" />
+          <Stepper value={qty} onChange={setQty} unit={unitShort("pcs")} testID="new-qty" />
         </View>
       </KeyboardAwareScrollView>
       <BottomBar>

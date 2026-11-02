@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 import auth
 from common import now_iso
 from db import get_db
+from units import check_quantity, unit_of
 
 router = APIRouter(prefix="/api/orders/cart", tags=["orders"])
 KEEP_DAYS = 7
@@ -23,6 +24,7 @@ class CartLine(BaseModel):
     gst_percent: float = 0
     image_path: str | None = Field(None, max_length=300)
     stock: float | None = None
+    unit: str | None = Field(None, max_length=12)  # the product's unit when it was added (none = pieces)
 
 
 class CartIn(BaseModel):
@@ -62,6 +64,9 @@ async def save_cart(body: CartIn, user: dict = Depends(auth.require("sell"))):
     if not body.items:
         await clear(db, user["business_id"], body.customer_id)
         return None
+    for i in body.items:
+        check_quantity(i.unit, i.quantity, i.name)
+        i.unit = unit_of(i.unit)
     doc = {"business_id": user["business_id"], "customer_id": body.customer_id,
            "items": [i.model_dump() for i in body.items], "discount": body.discount, "gst_removed": body.gst_removed,
            "updated_at": now_iso(),

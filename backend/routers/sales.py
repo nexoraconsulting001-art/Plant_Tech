@@ -24,6 +24,7 @@ from db import get_db
 from errors import AppError
 from routers import carts
 from routers.products import context, record_stock
+from units import check_quantity, count, unit_of
 
 router = APIRouter(prefix="/api", tags=["sales"])
 public_router = APIRouter(tags=["public"])
@@ -34,6 +35,7 @@ class LineIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     quantity: float = Field(gt=0)
     price: float = Field(ge=0)
+    unit: str | None = Field(None, max_length=12)  # loose items only; a product's own unit is used for the rest
 
 
 class InvoiceIn(BaseModel):
@@ -83,7 +85,7 @@ def _scope(user: dict) -> dict:
 def _summary(inv: dict) -> dict:
     return {k: inv.get(k) for k in ("id", "invoice_number", "customer_name", "customer_phone", "grand_total",
                                     "payment_method", "created_at", "created_by")} | {
-        "items_count": sum(i["quantity"] for i in inv.get("items", []))}
+        "items_count": sum(count(i) for i in inv.get("items", []))}
 
 
 async def _next_number(db, business_id: str) -> str:
@@ -105,6 +107,9 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
         if len(missing) == 1:
             raise AppError(400, "1 item in this order is no longer in your products.", "product_missing")
         raise AppError(400, "{{n}} items in this order are no longer in your products.", "product_missing", n=len(missing))
+    units = [unit_of(products[l.product_id].get("unit") if l.product_id else l.unit) for l in body.items]
+    for l, unit in zip(body.items, units):
+        check_quantity(unit, l.quantity, l.name.strip())
 
     # Every bill has a customer (name + phone): a saved one, or a new one made from the phone and name.
     customer, new_customer = None, None
@@ -144,10 +149,10 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
         await record_stock(db, user, updated, -qty, updated["stock"], "sale")
 
     lines = []
-    for l in body.items:
+    for l, unit in zip(body.items, units):
         p = products.get(l.product_id) if l.product_id else None
         cat = cats.get(p.get("category_id")) if p else None
-        line = {"product_id": l.product_id, "name": l.name.strip(), "quantity": l.quantity, "price": l.price,
+        line = {"product_id": l.product_id, "name": l.name.strip(), "quantity": l.quantity, "unit": unit, "price": l.price,
                 "gst_percent": (cat or {}).get("gst_percent", 0) if gst_registered and not gst_removed else 0,
                 "cost_price": (p or {}).get("cost_price", 0)}
         if p and money(l.price) != money(p.get("selling_price", 0)):
@@ -387,7 +392,8 @@ async def employees_report(range: Literal["day", "week", "month"] = "day",  # no
     keys, _, _ = _report_buckets(range, anchor)
     invs = await db.invoices.find({"business_id": bid, "date_key": {"$in": keys}},
                                   {"_id": 0, "grand_total": 1, "discount": 1, "created_at": 1, "created_by": 1,
-                                   "customer_id": 1, "items.quantity": 1, "items.price": 1, "items.list_price": 1}).to_list(50000)
+                                   "customer_id": 1, "items.quantity": 1, "items.unit": 1, "items.price": 1,
+                                   "items.list_price": 1}).to_list(50000)
     users = await db.users.find({"business_id": bid, "role": {"$in": ["owner", "worker"]}},
                                 {"_id": 0, "id": 1, "name": 1, "role": 1, "active": 1}).to_list(500)
     known = {u["id"]: u for u in users}
@@ -415,7 +421,7 @@ async def employees_report(range: Literal["day", "week", "month"] = "day",  # no
         r["first_at"] = min(x for x in (r["first_at"], inv["created_at"]) if x)
         r["last_at"] = max(x for x in (r["last_at"], inv["created_at"]) if x)
         for it in inv.get("items", []):
-            r["items"] += it["quantity"]
+            r["items"] += count(it)
             if it.get("list_price") is not None:
                 r["price_lines"] += 1
                 r["price_less"] += (it["list_price"] - it["price"]) * it["quantity"]

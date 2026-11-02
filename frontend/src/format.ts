@@ -1,5 +1,7 @@
 import i18n from "i18next";
 
+import { unitShort } from "@/src/units";
+
 const locale = () => (i18n.language === "hi" ? "hi-IN" : "en-IN");
 
 // ₹1,23,456 (no paise when whole), ₹22.88
@@ -9,8 +11,14 @@ export function formatCurrency(amount: number | null | undefined): string {
   return "₹" + n.toLocaleString(locale(), whole ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// 40, 1.5, 0.25 (up to 3 decimals, for kg / litre / metre; no trailing zeros)
 export function formatQty(n: number): string {
-  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  return String(Math.round((Number(n) || 0) * 1000) / 1000);
+}
+
+// "40 pcs", "1.5 kg"; just the number for lines saved before units existed
+export function formatQtyUnit(n: number, unit?: string | null): string {
+  return unit ? `${formatQty(n)} ${unitShort(unit)}` : formatQty(n);
 }
 
 // "1 item" / "3 items": plural(n, "1 item", "{{n}} items")

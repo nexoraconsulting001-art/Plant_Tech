@@ -1,5 +1,5 @@
 // UI kit matching the approved prototype: icon + label on actions, 56+ touch targets, big numbers.
-import React, { createContext, useContext } from "react";
+import React, { createContext, useContext, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -20,7 +20,9 @@ import { useTranslation } from "react-i18next";
 import MaterialDesignIcons from "@react-native-vector-icons/material-design-icons";
 
 import { fileUrl } from "@/src/api";
+import { formatQty } from "@/src/format";
 import { colors, fonts, hindiRoom, radius, spacing, touch, type, TextVariant } from "@/src/theme";
+import { MAX_QTY, roundQty } from "@/src/units";
 
 export type IconName = React.ComponentProps<typeof MaterialDesignIcons>["name"];
 
@@ -255,19 +257,46 @@ export function Segmented<V extends string>({ options, value, onChange }: {
   );
 }
 
-export function Stepper({ value, onChange, min = 1, max = 9999, testID }: {
-  value: number; onChange: (v: number) => void; min?: number; max?: number; testID?: string;
+// How many: − / + buttons, and the number itself can be typed (number pad for pieces, decimals for kg,
+// litre, metre). A typed amount is rounded to the unit and kept between min and max (never above MAX_QTY);
+// one over the max shows amber until the field is left, then snaps to the max.
+export function Stepper({ value, onChange, min = 1, max = 9999, decimals, unit, testID }: {
+  value: number; onChange: (v: number) => void; min?: number; max?: number; decimals?: boolean; unit?: string; testID?: string;
 }) {
   const { t } = useTranslation();
-  const btn = { width: touch.min, height: 52, borderRadius: 14, alignItems: "center" as const, justifyContent: "center" as const };
+  const [text, setText] = useState<string | null>(null); // what is being typed; null when not typing
+  const top = Math.min(max, MAX_QTY);
+  const fit = (n: number) => Math.max(min, Math.min(decimals ? top : Math.floor(top), roundQty(n, !decimals)));
+  const step = (n: number) => {
+    setText(null);
+    onChange(fit(n));
+  };
+  const shown = text ?? formatQty(value);
+  const over = text !== null && Number(text) > top;
+  const btn = { width: 52, height: 52, borderRadius: 14, alignItems: "center" as const, justifyContent: "center" as const };
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-      <Pressable testID={testID ? `${testID}-minus` : undefined} accessibilityLabel={t("Decrease quantity")} onPress={() => onChange(Math.max(min, value - 1))}
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+      <Pressable testID={testID ? `${testID}-minus` : undefined} accessibilityLabel={t("Decrease quantity")}
+        onPress={() => step(value - 1 >= min ? value - 1 : min === 0 ? 0 : value)}
         style={[btn, { borderWidth: 2, borderColor: colors.lineStrong, backgroundColor: colors.surface }]}>
         <Icon name="minus" size={24} color={colors.ink} />
       </Pressable>
-      <T v="number" style={{ minWidth: 40, textAlign: "center", fontSize: 26 }} testID={testID ? `${testID}-value` : undefined}>{value}</T>
-      <Pressable testID={testID ? `${testID}-plus` : undefined} accessibilityLabel={t("Increase quantity")} onPress={() => onChange(Math.min(max, value + 1))}
+      <View style={{ minWidth: 72, height: 52, paddingHorizontal: spacing.xs, borderWidth: 2, borderRadius: radius.md, alignItems: "center", justifyContent: "center",
+        borderColor: over ? colors.amber : colors.lineStrong, backgroundColor: colors.surface }}>
+        <TextInput value={shown} keyboardType={decimals ? "decimal-pad" : "number-pad"} selectTextOnFocus maxFontSizeMultiplier={MAX_FONT_SCALE}
+          accessibilityLabel={t("Quantity")} testID={testID ? `${testID}-value` : undefined}
+          onFocus={() => setText(formatQty(value))} onBlur={() => setText(null)}
+          onChangeText={(v) => {
+            const clean = decimals ? v.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1").replace(/(\.\d{3})\d+/, "$1") : v.replace(/\D/g, "");
+            setText(clean);
+            const n = Number(clean);
+            if (clean !== "" && Number.isFinite(n) && n > 0) onChange(fit(n));
+          }}
+          style={{ width: Math.max(60, 14 * shown.length + 4), height: unit ? 30 : 44, padding: 0, textAlign: "center",
+            fontFamily: fonts.display, fontSize: 24, color: colors.ink }} />
+        {!!unit && <T v="caption" style={{ fontSize: 12, lineHeight: 15 }} testID={testID ? `${testID}-unit` : undefined}>{unit}</T>}
+      </View>
+      <Pressable testID={testID ? `${testID}-plus` : undefined} accessibilityLabel={t("Increase quantity")} onPress={() => step(value + 1)}
         style={[btn, { backgroundColor: colors.green }]}>
         <Icon name="plus" size={24} color={colors.white} />
       </Pressable>

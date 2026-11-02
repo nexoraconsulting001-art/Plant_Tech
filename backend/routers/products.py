@@ -1,6 +1,7 @@
 """Products (plants, pots, soil, tools) and their stock.
 
 A product stays in the list at 0 stock; it is only removed when the owner deletes it.
+Each product has a unit (pieces, kg, litre…, see units.py); plants are always pieces.
 Pictures: the shop's own photo if it has one, else the shared library picture.
 """
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +13,7 @@ from common import name_key, new_id, now_iso
 from db import get_db
 from routers import library
 from search import product_terms, search_score
+from units import Unit, is_plant_category, unit_of
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -28,6 +30,7 @@ class ProductIn(BaseModel):
     min_stock: float = Field(5, ge=0)
     supplier: str = Field("", max_length=120)
     notes: str = Field("", max_length=500)
+    unit: Unit = "pcs"
 
 
 class ProductPatch(BaseModel):
@@ -40,6 +43,7 @@ class ProductPatch(BaseModel):
     min_stock: float | None = Field(None, ge=0)
     supplier: str | None = Field(None, max_length=120)
     notes: str | None = Field(None, max_length=500)
+    unit: Unit | None = None
 
 
 class StockIn(BaseModel):
@@ -76,7 +80,8 @@ def view(p: dict, cats: dict, lib: dict, gst_registered: bool, user: dict) -> di
         "id": p["id"], "sku": p.get("sku", ""), "name": p["name"], "botanical_name": p.get("botanical_name", ""),
         "category_id": p.get("category_id"), "category": cat.get("name", ""),
         "gst_percent": cat.get("gst_percent", 0) if gst_registered else 0,
-        "selling_price": p.get("selling_price", 0), "stock": p.get("stock", 0), "min_stock": p.get("min_stock", 0),
+        "selling_price": p.get("selling_price", 0), "unit": unit_of(p.get("unit")),
+        "stock": p.get("stock", 0), "min_stock": p.get("min_stock", 0),
         "low_stock": p.get("stock", 0) <= p.get("min_stock", 0), "out_of_stock": p.get("stock", 0) <= 0,
         "supplier": p.get("supplier", ""), "notes": p.get("notes", ""), "library_id": p.get("library_id"),
         "photo_path": p.get("photo_path"), "image_path": p.get("photo_path") or library_image,
@@ -102,9 +107,13 @@ async def get_owned(db, user: dict, product_id: str) -> dict:
     return p
 
 
-async def _check_category(db, user: dict, category_id: str | None):
-    if category_id and not await db.categories.find_one({"id": category_id, "business_id": user["business_id"]}):
+async def _check_category(db, user: dict, category_id: str | None) -> dict | None:
+    if not category_id:
+        return None
+    cat = await db.categories.find_one({"id": category_id, "business_id": user["business_id"]}, {"_id": 0})
+    if not cat:
         raise HTTPException(400, "This category no longer exists.")
+    return cat
 
 
 @router.get("")
@@ -160,17 +169,18 @@ async def create_product(body: ProductIn, user: dict = Depends(auth.require("sto
             cat = await db.categories.find_one({"business_id": user["business_id"],
                                                 "name_key": name_key(entry["default_category"])}, {"_id": 0})
             category_id = cat["id"] if cat else None
-    else:
-        cat = await db.categories.find_one({"id": category_id}, {"_id": 0}) if category_id else None
+    cat = await db.categories.find_one({"id": category_id}, {"_id": 0}) if category_id else None
+    if not library_id:
         library_id = await library.entry_for_new_product(db, body.name, cat["name"] if cat else None,
                                                          user["business_id"])
+    unit = "pcs" if is_plant_category((cat or {}).get("name")) else body.unit
     count = await db.products.count_documents({"business_id": user["business_id"]})
     doc = {
         "id": new_id(), "business_id": user["business_id"], "sku": f"NP-{count + 1:04d}",
         "name": body.name.strip(), "botanical_name": body.botanical_name.strip(), "category_id": category_id,
         "library_id": library_id, "photo_path": body.photo_path, "selling_price": body.selling_price,
         "cost_price": body.cost_price if auth.can(user, "owner") else 0, "stock": body.stock,
-        "min_stock": body.min_stock, "supplier": body.supplier.strip(), "notes": body.notes.strip(),
+        "min_stock": body.min_stock, "supplier": body.supplier.strip(), "notes": body.notes.strip(), "unit": unit,
         "deleted_at": None, "created_at": now_iso(), "created_by": user["id"],
     }
     await db.products.insert_one(doc)
@@ -196,8 +206,10 @@ async def update_product(product_id: str, body: ProductPatch, user: dict = Depen
     update = body.model_dump(exclude_none=True)
     if "cost_price" in update and not auth.can(user, "owner"):
         update.pop("cost_price")
-    if "category_id" in update:
-        await _check_category(db, user, update["category_id"])
+    cat = await _check_category(db, user, update["category_id"]) if "category_id" in update else (
+        await db.categories.find_one({"id": p.get("category_id")}, {"_id": 0}) if p.get("category_id") else None)
+    if is_plant_category((cat or {}).get("name")) and ("unit" in update or unit_of(p.get("unit")) != "pcs"):
+        update["unit"] = "pcs"  # plants are always counted in pieces
     for k in ("name", "botanical_name", "supplier", "notes"):
         if k in update:
             update[k] = update[k].strip()

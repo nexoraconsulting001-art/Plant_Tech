@@ -17,6 +17,7 @@ import { formatQty } from "@/src/format";
 import { takePhoto } from "@/src/hooks/useImageCapture";
 import { colors, radius, spacing } from "@/src/theme";
 import type { LibraryEntry, Product } from "@/src/types";
+import { isPlantCategory } from "@/src/units";
 
 export default function NewProduct() {
   const { t } = useTranslation();
@@ -41,7 +42,7 @@ export default function NewProduct() {
 
   function fromLibrary(e: LibraryEntry) {
     setForm({ ...emptyProduct, name: e.name, botanical_name: e.botanical, library_id: e.id, library_image: e.image_path,
-      category_id: catIdByName(e.default_category) });
+      category_id: catIdByName(e.default_category), plant: isPlantCategory(e.default_category) });
   }
 
   async function scan() {
@@ -58,7 +59,7 @@ export default function NewProduct() {
       }
       const path = await uploadImage(out.result.base64);
       setForm({ ...emptyProduct, name: r.plant_name, botanical_name: r.scientific_name || "",
-        category_id: r.suggested_category_id ?? null, photo_path: path });
+        category_id: r.suggested_category_id ?? null, photo_path: path, plant: r.kind === "plant" });
     } catch (e: any) {
       const code = e instanceof ApiError ? e.code : "";
       if (code === "looks_like_bill") {

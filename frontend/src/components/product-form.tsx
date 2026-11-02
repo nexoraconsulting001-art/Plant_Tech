@@ -1,5 +1,6 @@
 // Product details form, used by Add product and Edit product.
 // Picture: the shop's own photo wins; otherwise the shared library picture is shown.
+// Sold by: pieces (whole numbers) or kg / litre / metre (decimals); plants are always pieces.
 import { useState } from "react";
 import { ActivityIndicator, Pressable, View } from "react-native";
 import { Image } from "expo-image";
@@ -8,25 +9,29 @@ import { useTranslation } from "react-i18next";
 
 import { fileUrl, uploadImage } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { CategoryPicker } from "@/src/components/category-picker";
+import { CategoryPicker, useCategories } from "@/src/components/category-picker";
+import { OptionRow, SelectField, Sheet } from "@/src/components/sheet";
 import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, Field, Icon, T } from "@/src/components/ui";
 import { formatCurrency } from "@/src/format";
 import { pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
 import { colors, radius, spacing } from "@/src/theme";
+import { isPlantCategory, roundQty, Unit, UNITS, unitName, unitShort, wholeUnit } from "@/src/units";
 
 export type ProductValues = {
   name: string; botanical_name: string; category_id: string | null; library_id: string | null;
   photo_path: string | null; library_image: string | null;
   selling_price: string; stock: string; cost_price: string; min_stock: string;
+  unit: Unit; plant?: boolean; // plant: the photo was of a plant (always pieces)
 };
 
 export const emptyProduct: ProductValues = {
   name: "", botanical_name: "", category_id: null, library_id: null, photo_path: null, library_image: null,
-  selling_price: "", stock: "", cost_price: "", min_stock: "5",
+  selling_price: "", stock: "", cost_price: "", min_stock: "5", unit: "pcs",
 };
 
 const num = (v: string) => v.replace(/[^0-9.]/g, "");
+const digits = (v: string) => v.replace(/\D/g, "");
 
 export function ProductForm({ initial, isNew, onSave, saving, extra }: {
   initial: ProductValues; isNew: boolean; saving: boolean; extra?: React.ReactNode;
@@ -40,6 +45,11 @@ export function ProductForm({ initial, isNew, onSave, saving, extra }: {
   const set = (patch: Partial<ProductValues>) => setV((o) => ({ ...o, ...patch }));
   const gst = !!user?.business?.gst_registered;
   const profit = user?.business?.profit_percent ?? 60;
+  const cats = useCategories();
+  const plant = !!v.plant || isPlantCategory(cats.data?.find((c) => c.id === v.category_id)?.name);
+  const unit: Unit = plant ? "pcs" : v.unit;
+  const whole = wholeUnit(unit);
+  const count = whole ? digits : num; // stock typed in whole numbers for pieces
 
   async function photo(source: "camera" | "gallery") {
     const out = source === "camera" ? await takePhoto({ aspect: 1 }) : await pickFromGallery({ aspect: 1 });
@@ -64,11 +74,11 @@ export function ProductForm({ initial, isNew, onSave, saving, extra }: {
   function save() {
     const body: Record<string, unknown> = {
       name: v.name.trim(), botanical_name: v.botanical_name, category_id: v.category_id, photo_path: v.photo_path,
-      selling_price: Number(v.selling_price) || 0, min_stock: Number(v.min_stock) || 0,
+      selling_price: Number(v.selling_price) || 0, min_stock: roundQty(Number(v.min_stock) || 0, whole), unit,
     };
     if (isOwner && v.cost_price !== "") body.cost_price = Number(v.cost_price) || 0;
     if (isNew) {
-      body.stock = Number(v.stock) || 0;
+      body.stock = roundQty(Number(v.stock) || 0, whole);
       body.library_id = v.library_id;
     }
     onSave(body);
@@ -100,18 +110,25 @@ export function ProductForm({ initial, isNew, onSave, saving, extra }: {
           <Field label={t("Product name")} value={v.name} onChangeText={(name) => set({ name })} autoCapitalize="words" testID="product-name"
             placeholder={t("e.g. Money Plant")} />
           <CategoryPicker value={v.category_id} onChange={(category_id) => set({ category_id })} />
+          {plant ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }} testID="product-unit-plant">
+              <Icon name="sprout" size={20} color={colors.greenMid} />
+              <T v="small" style={{ flex: 1 }}>{t("Plants are sold by the piece.")}</T>
+            </View>
+          ) : <UnitPicker value={unit} onChange={(u) => set({ unit: u })} />}
         </Section>
 
         <Section title={t("Price and stock")}>
           <Field label={gst ? t("Selling price ₹ (includes GST)") : t("Selling price ₹")} value={v.selling_price} keyboardType="decimal-pad"
-            onChangeText={(x) => set({ selling_price: num(x) })} placeholder="0" testID="product-price" inputStyle={{ fontSize: 26 }} />
+            onChangeText={(x) => set({ selling_price: num(x) })} placeholder="0" testID="product-price" inputStyle={{ fontSize: 26 }}
+            hint={whole ? undefined : t("Price for 1 {{unit}}", { unit: unitShort(unit) })} />
           <View style={{ flexDirection: "row", gap: spacing.md }}>
             {isNew && (
-              <Field style={{ flex: 1 }} label={t("Stock now")} value={v.stock} keyboardType="decimal-pad"
-                onChangeText={(x) => set({ stock: num(x) })} placeholder="0" testID="product-stock" />
+              <Field style={{ flex: 1 }} label={`${t("Stock now")} · ${unitShort(unit)}`} value={v.stock} keyboardType={whole ? "number-pad" : "decimal-pad"}
+                onChangeText={(x) => set({ stock: count(x) })} placeholder="0" testID="product-stock" />
             )}
-            <Field style={{ flex: 1 }} label={t("Low-stock alert at")} value={v.min_stock} keyboardType="decimal-pad"
-              onChangeText={(x) => set({ min_stock: num(x) })} testID="product-min" />
+            <Field style={{ flex: 1 }} label={`${t("Low-stock alert at")} · ${unitShort(unit)}`} value={v.min_stock} keyboardType={whole ? "number-pad" : "decimal-pad"}
+              onChangeText={(x) => set({ min_stock: count(x) })} testID="product-min" />
           </View>
           {isOwner && (
             <Field label={t("Cost price ₹")} hint={t("Used for profit in reports. Visible only to you.")} value={v.cost_price} keyboardType="decimal-pad"
@@ -133,6 +150,24 @@ export function ProductForm({ initial, isNew, onSave, saving, extra }: {
       <BottomBar>
         <Button title={t("Save product")} icon="content-save" onPress={save} loading={saving} disabled={!ok} testID="product-save" />
       </BottomBar>
+    </>
+  );
+}
+
+// "Sold by": one field that opens the list of units.
+function UnitPicker({ value, onChange }: { value: Unit; onChange: (u: Unit) => void }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <SelectField label={t("Sold by")} value={unitName(value)} onPress={() => setOpen(true)} testID="product-unit" />
+      <Sheet visible={open} onClose={() => setOpen(false)} title={t("Sold by")}>
+        {UNITS.map((u) => (
+          <OptionRow key={u} label={unitName(u) === unitShort(u) ? unitName(u) : `${unitName(u)} · ${unitShort(u)}`} selected={value === u} testID={`unit-${u}`}
+            sub={wholeUnit(u) ? t("Whole numbers, like 40") : t("Decimals allowed, like 1.5")}
+            onPress={() => { onChange(u); setOpen(false); }} />
+        ))}
+      </Sheet>
     </>
   );
 }

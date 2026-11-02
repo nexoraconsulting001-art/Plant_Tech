@@ -23,7 +23,8 @@ export function useCreateBill() {
     try {
       await cart.beforeBill();
       const inv: Invoice = await apiPost("/invoices", {
-        items: cart.items.map((i) => ({ product_id: isLoose(i.product_id) ? null : i.product_id, name: i.name, quantity: i.quantity, price: i.price })),
+        items: cart.items.map((i) => ({ product_id: isLoose(i.product_id) ? null : i.product_id, name: i.name, quantity: i.quantity, price: i.price,
+          unit: i.unit ?? null })),
         customer_id: cart.customer.id,
         discount: cart.discount,
         payment_method: method,

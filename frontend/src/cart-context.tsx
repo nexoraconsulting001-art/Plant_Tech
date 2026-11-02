@@ -4,10 +4,12 @@
 // product_id "loose-…" = a line billed without stock; the server gets product_id null for it.
 // price = the price for this order; list_price = the shop's price when the item was added.
 // gstRemoved = the owner's "Bill without GST": same total, no GST shown (saved with the order).
+// unit = the product's unit when it was added (none = pieces): 1.5 is allowed for kg, litre, metre only.
 import React, { createContext, useContext, useRef, useState } from "react";
 
 import { apiDelete, apiGet, apiPut } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { MAX_QTY, roundQty, wholeUnit } from "@/src/units";
 
 export type CartItem = {
   product_id: string;
@@ -18,6 +20,7 @@ export type CartItem = {
   gst_percent?: number;
   image_path?: string | null;
   stock?: number | null;
+  unit?: string | null;
 };
 
 export type OrderCustomer = { id: string; name: string; phone: string; purchase_count?: number };
@@ -52,11 +55,15 @@ const CartContext = createContext<CartContextType | null>(null);
 const SAVE_AFTER_MS = 600;
 
 export const isLoose = (id: string) => id.startsWith("loose-");
-const howMany = (items: CartItem[]) => items.reduce((s, i) => s + i.quantity, 0);
+// "3 items": pieces count one by one; 1.5 kg of something counts as one item
+const howMany = (items: CartItem[]) => items.reduce((s, i) => s + (wholeUnit(i.unit) ? i.quantity : 1), 0);
+// Never more than the server takes on one line (a refused save would be lost silently), whole for pieces.
+const fitQty = (i: CartItem, qty: number) => Math.min(MAX_QTY, roundQty(qty, wholeUnit(i.unit)));
 
 const body = (o: Order) => ({
   customer_id: o.customer!.id, discount: o.discount, gst_removed: o.gstRemoved,
-  items: o.items.map((i) => ({ ...i, list_price: i.list_price ?? null, gst_percent: i.gst_percent ?? 0, image_path: i.image_path ?? null, stock: i.stock ?? null })),
+  items: o.items.map((i) => ({ ...i, list_price: i.list_price ?? null, gst_percent: i.gst_percent ?? 0, image_path: i.image_path ?? null, stock: i.stock ?? null,
+    unit: i.unit ?? null })),
 });
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
@@ -150,13 +157,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   }
 
   const addItem = (item: CartItem) =>
-    setItems((prev) =>
-      prev.some((i) => i.product_id === item.product_id)
-        ? prev.map((i) => (i.product_id === item.product_id ? { ...i, quantity: i.quantity + item.quantity } : i))
-        : [...prev, { ...item, list_price: item.list_price ?? item.price }],
-    );
+    setItems((prev) => {
+      const had = prev.find((i) => i.product_id === item.product_id);
+      if (!had) return [...prev, { ...item, list_price: item.list_price ?? item.price, quantity: fitQty(item, item.quantity) }];
+      const next = { ...had, unit: item.unit ?? had.unit };
+      return prev.map((i) => (i === had ? { ...next, quantity: fitQty(next, had.quantity + item.quantity) } : i));
+    });
   const setQuantity = (id: string, qty: number) =>
-    setItems((prev) => (qty <= 0 ? prev.filter((i) => i.product_id !== id) : prev.map((i) => (i.product_id === id ? { ...i, quantity: qty } : i))));
+    setItems((prev) => (qty <= 0 ? prev.filter((i) => i.product_id !== id) : prev.map((i) => (i.product_id === id ? { ...i, quantity: fitQty(i, qty) } : i))));
   const setPrice = (id: string, price: number) =>
     setItems((prev) => prev.map((i) => (i.product_id === id ? { ...i, price: Math.max(0, price) } : i)));
   const removeItem = (id: string) => setItems((prev) => prev.filter((i) => i.product_id !== id));

@@ -11,9 +11,10 @@ import { useAuth } from "@/src/auth";
 import { Sheet } from "@/src/components/sheet";
 import { useToast } from "@/src/components/toast";
 import { Badge, BottomBar, Button, Chip, ErrorView, Header, Icon, LoadingView, MAX_FONT_SCALE, Screen, T } from "@/src/components/ui";
-import { formatCurrency, formatDate, formatQty } from "@/src/format";
+import { formatCurrency, formatDate, formatQty, formatQtyUnit } from "@/src/format";
 import { colors, fonts, radius, spacing, touch } from "@/src/theme";
 import type { Product, StockEntry } from "@/src/types";
+import { roundQty, unitShort, wholeUnit } from "@/src/units";
 
 type Change = "add" | "remove";
 
@@ -49,7 +50,8 @@ export default function ProductDetail() {
               </View>
               <View style={{ flex: 1, gap: spacing.xs, justifyContent: "center" }}>
                 <T v="title" style={{ fontSize: 24, lineHeight: 30 }} testID="product-title">{p.name}</T>
-                <T v="small">{[p.category ? t(p.category) : t("No category"), p.gst_percent ? t("{{n}}% GST", { n: p.gst_percent }) : ""].filter(Boolean).join(" · ")}</T>
+                <T v="small">{[p.category ? t(p.category) : t("No category"), p.gst_percent ? t("{{n}}% GST", { n: p.gst_percent }) : "",
+                  wholeUnit(p.unit) ? "" : t("Sold by {{unit}}", { unit: unitShort(p.unit) })].filter(Boolean).join(" · ")}</T>
                 {p.image_source === "library" && <T v="caption">{t("Shared picture")}</T>}
               </View>
             </View>
@@ -58,13 +60,14 @@ export default function ProductDetail() {
               <View style={{ flex: 1, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, gap: 2 }}>
                 <T v="label">{t("Price")}</T>
                 <T v="title">{formatCurrency(p.selling_price)}</T>
+                {!wholeUnit(p.unit) && <T v="caption">{t("per {{unit}}", { unit: unitShort(p.unit) })}</T>}
                 {isOwner && !!p.cost_price && <T v="caption">{t("Cost {{c}} · visible only to you", { c: formatCurrency(p.cost_price) })}</T>}
               </View>
               <View style={{ flex: 1, padding: spacing.lg, borderRadius: radius.lg, borderWidth: 1, gap: 2,
                 borderColor: p.out_of_stock ? colors.redLine : p.low_stock ? colors.amber : colors.line,
                 backgroundColor: p.out_of_stock ? "#FDECEC" : p.low_stock ? colors.amberTint : colors.surface }}>
                 <T v="label">{t("In stock")}</T>
-                <T v="title" testID="product-stock" color={p.out_of_stock ? colors.red : colors.ink}>{formatQty(p.stock)}</T>
+                <T v="title" testID="product-stock" color={p.out_of_stock ? colors.red : colors.ink}>{formatQtyUnit(p.stock, p.unit)}</T>
                 {p.out_of_stock ? <Badge text={t("Out of stock")} tone="red" />
                   : p.low_stock ? <T v="caption" color={colors.amberInk}>{t("Low · alert below {{n}}", { n: formatQty(p.min_stock) })}</T>
                   : <T v="caption">{t("Alert below {{n}}", { n: formatQty(p.min_stock) })}</T>}
@@ -122,11 +125,12 @@ function StockSheet({ product: p, kind, onClose, onDone }: { product: Product; k
   const [text, setText] = useState("1");
   const [reason, setReason] = useState(REASONS[0]);
   const [busy, setBusy] = useState(false);
+  const whole = wholeUnit(p.unit); // pieces: whole numbers only
   const n = Number(text) || 0;
   const max = adding ? 100000 : p.stock;
   const ok = n > 0 && n <= max;
-  const after = adding ? p.stock + n : p.stock - n;
-  const set = (v: number) => setText(String(Math.max(0, Math.min(max, Math.round(v * 100) / 100))));
+  const after = roundQty(adding ? p.stock + n : p.stock - n, false);
+  const set = (v: number) => setText(formatQty(Math.max(0, Math.min(whole ? Math.floor(max) : max, roundQty(v, whole)))));
 
   async function save() {
     setBusy(true);
@@ -134,8 +138,8 @@ function StockSheet({ product: p, kind, onClose, onDone }: { product: Product; k
       await apiPost(`/products/${p.id}/stock`, { change: adding ? n : -n, reason: adding ? "Added" : reason });
       qc.invalidateQueries({ queryKey: ["products"] });
       onDone();
-      toast.show(adding ? t("Added {{n}}. Stock is now {{s}}", { n: formatQty(n), s: formatQty(after) })
-        : t("Removed {{n}}. Stock is now {{s}}", { n: formatQty(n), s: formatQty(after) }), "success");
+      toast.show(adding ? t("Added {{n}}. Stock is now {{s}}", { n: formatQtyUnit(n, p.unit), s: formatQtyUnit(after, p.unit) })
+        : t("Removed {{n}}. Stock is now {{s}}", { n: formatQtyUnit(n, p.unit), s: formatQtyUnit(after, p.unit) }), "success");
       onClose();
     } catch (e: any) {
       toast.show(e.message, "error");
@@ -148,7 +152,7 @@ function StockSheet({ product: p, kind, onClose, onDone }: { product: Product; k
   return (
     <Sheet visible onClose={onClose} title={adding ? t("Add stock") : t("Remove stock")} testID="stock-sheet"
       footer={
-        <Button title={adding ? t("Add {{n}}", { n: formatQty(n) }) : t("Remove {{n}}", { n: formatQty(n) })} icon={adding ? "plus" : "minus"}
+        <Button title={adding ? t("Add {{n}}", { n: formatQtyUnit(n, p.unit) }) : t("Remove {{n}}", { n: formatQtyUnit(n, p.unit) })} icon={adding ? "plus" : "minus"}
           variant={adding ? "primary" : "danger"} onPress={save} loading={busy} disabled={!ok} testID="stock-save" />
       }>
       <T v="body" color={colors.inkSoft}>{p.name}</T>
@@ -156,10 +160,14 @@ function StockSheet({ product: p, kind, onClose, onDone }: { product: Product; k
         <Pressable accessibilityLabel={t("Decrease quantity")} onPress={() => set(n - 1)} style={[round, { borderWidth: 2, borderColor: colors.lineStrong }]} testID="stock-minus">
           <Icon name="minus" size={32} color={colors.ink} />
         </Pressable>
-        <TextInput value={text} onChangeText={(v) => setText(v.replace(/[^0-9.]/g, ""))} keyboardType="decimal-pad" selectTextOnFocus
-          maxFontSizeMultiplier={MAX_FONT_SCALE} testID="stock-qty" accessibilityLabel={t("How many")}
-          style={{ width: 120, height: 72, textAlign: "center", fontFamily: fonts.display, fontSize: 40, color: colors.ink,
-            borderWidth: 2, borderColor: ok ? colors.green : colors.red, borderRadius: radius.lg }} />
+        <View style={{ alignItems: "center", gap: 2 }}>
+          <TextInput value={text} onChangeText={(v) => setText(whole ? v.replace(/\D/g, "") : v.replace(/[^0-9.]/g, ""))}
+            keyboardType={whole ? "number-pad" : "decimal-pad"} selectTextOnFocus
+            maxFontSizeMultiplier={MAX_FONT_SCALE} testID="stock-qty" accessibilityLabel={t("How many")}
+            style={{ width: 120, height: 72, textAlign: "center", fontFamily: fonts.display, fontSize: 40, color: colors.ink,
+              borderWidth: 2, borderColor: ok ? colors.green : colors.red, borderRadius: radius.lg }} />
+          <T v="caption" testID="stock-unit">{unitShort(p.unit)}</T>
+        </View>
         <Pressable accessibilityLabel={t("Increase quantity")} onPress={() => set(n + 1)} style={[round, { backgroundColor: adding ? colors.green : colors.red }]} testID="stock-plus">
           <Icon name="plus" size={32} color={colors.white} />
         </Pressable>
@@ -179,7 +187,7 @@ function StockSheet({ product: p, kind, onClose, onDone }: { product: Product; k
       <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: spacing.md, padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.page }}>
         <T v="bold">{formatQty(p.stock)}</T>
         <Icon name="arrow-right" size={22} color={colors.inkSoft} />
-        <T v="number" color={after < 0 ? colors.red : colors.greenDark}>{formatQty(Math.max(after, 0))}</T>
+        <T v="number" color={after < 0 ? colors.red : colors.greenDark}>{formatQtyUnit(Math.max(after, 0), p.unit)}</T>
         <T v="small">{t("in stock after this")}</T>
       </View>
       {!adding && n > p.stock && <T v="small" color={colors.red}>{t("Only {{n}} in stock", { n: formatQty(p.stock) })}</T>}

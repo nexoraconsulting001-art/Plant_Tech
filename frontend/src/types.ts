@@ -1,9 +1,11 @@
 // Shapes returned by the backend (see backend/routers/*.py).
+import type { Unit } from "@/src/units";
 
 export type Product = {
   id: string; sku: string; name: string; botanical_name: string;
   category_id: string | null; category: string; gst_percent: number;
   selling_price: number; cost_price?: number; // cost only for the owner (and workers with reports)
+  unit: Unit; // what it is sold in (src/units.ts)
   stock: number; min_stock: number; low_stock: boolean; out_of_stock: boolean;
   supplier: string; notes: string; library_id: string | null;
   photo_path: string | null; image_path: string | null; image_source: "own" | "library" | null;
@@ -24,6 +26,7 @@ export type Category = { id: string; name: string; gst_percent: number; product_
 
 export type InvoiceLine = {
   product_id: string | null; name: string; quantity: number; price: number; gst_percent: number;
+  unit?: Unit; // none on bills made before units existed
   list_price?: number; // the shop price, kept when this bill gave a different price
   amount: number; net: number; tax: number;
 };

@@ -12,6 +12,7 @@ import { DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer"
 import { BottomBar, Button, EmptyState, Field, Header, Icon, MAX_FONT_SCALE, Screen, Stepper, T, Thumb, Toggle } from "@/src/components/ui";
 import { formatCurrency, plural } from "@/src/format";
 import { colors, fonts, radius, spacing } from "@/src/theme";
+import { unitShort, wholeUnit } from "@/src/units";
 
 export default function OrderCart() {
   const { t } = useTranslation();
@@ -74,6 +75,7 @@ function Line({ it }: { it: CartItem }) {
   const loose = isLoose(it.product_id);
   const shop = it.list_price ?? it.price;
   const changed = !loose && Math.abs(it.price - shop) > 0.004;
+  const whole = wholeUnit(it.unit);
   return (
     <View testID={`cart-line-${it.name}`} style={{ gap: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
@@ -86,7 +88,7 @@ function Line({ it }: { it: CartItem }) {
       </View>
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
         <View style={{ flex: 1 }}>
-          <T v="label">{t("Price each")}</T>
+          <T v="label">{whole ? t("Price each") : t("Price per {{unit}}", { unit: unitShort(it.unit) })}</T>
           {changed && (
             <T v="small" testID={`cart-shop-price-${it.name}`}>
               {t("Shop price")} <T v="small" style={{ textDecorationLine: "line-through" }}>{formatCurrency(shop)}</T>
@@ -101,7 +103,7 @@ function Line({ it }: { it: CartItem }) {
           <Icon name="trash-can-outline" size={24} color={colors.red} />
           <T v="bold" color={colors.red}>{t("Remove")}</T>
         </Pressable>
-        <Stepper value={it.quantity} min={0} max={!loose && it.stock != null ? it.stock : 9999}
+        <Stepper value={it.quantity} min={0} max={!loose && it.stock != null ? it.stock : 9999} decimals={!whole} unit={unitShort(it.unit)}
           onChange={(q) => cart.setQuantity(it.product_id, q)} testID={`cart-qty-${it.name}`} />
       </View>
     </View>

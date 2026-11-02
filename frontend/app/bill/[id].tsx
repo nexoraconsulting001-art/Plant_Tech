@@ -12,7 +12,7 @@ import { useAuth } from "@/src/auth";
 import { BillFileResult, downloadBillPdf, shareBillPdf } from "@/src/bill-file";
 import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, ErrorView, Header, Icon, LoadingView, Screen, T } from "@/src/components/ui";
-import { formatCurrency, formatDate, formatPhone, formatQty, formatTime } from "@/src/format";
+import { formatCurrency, formatDate, formatPhone, formatQtyUnit, formatTime } from "@/src/format";
 import { colors, radius, spacing } from "@/src/theme";
 import type { Invoice } from "@/src/types";
 
@@ -114,7 +114,7 @@ export default function Bill() {
             <View key={i} style={{ flexDirection: "row", gap: spacing.sm }}>
               <View style={{ flex: 1 }}>
                 <T v="bold">{it.name}</T>
-                <T v="small">{formatQty(it.quantity)} × {formatCurrency(it.price)}{it.gst_percent ? ` · GST ${it.gst_percent}%` : ""}</T>
+                <T v="small">{formatQtyUnit(it.quantity, it.unit)} × {formatCurrency(it.price)}{it.gst_percent ? ` · GST ${it.gst_percent}%` : ""}</T>
                 {it.list_price != null && it.list_price !== it.price && (
                   <T v="caption" testID={`bill-shop-price-${it.name}`}>
                     {t("Shop price")} <T v="caption" style={{ textDecorationLine: "line-through" }}>{formatCurrency(it.list_price)}</T>

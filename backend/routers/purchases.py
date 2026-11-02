@@ -87,7 +87,7 @@ async def create_purchase(body: PurchaseIn, user: dict = Depends(auth.require("s
                  "library_id": await library.entry_for_new_product(db, it.name, None, bid), "photo_path": None,
                  "selling_price": it.selling_price if it.selling_price is not None else round(it.purchase_price * markup),
                  "cost_price": it.purchase_price if owner else 0, "stock": it.quantity, "min_stock": 5,
-                 "supplier": supplier_name, "notes": "", "deleted_at": None, "created_at": now_iso(),
+                 "supplier": supplier_name, "notes": "", "unit": "pcs", "deleted_at": None, "created_at": now_iso(),
                  "created_by": user["id"]}
             await db.products.insert_one(p)
             await record_stock(db, user, p, it.quantity, it.quantity, "purchase", f"Supplier bill {body.invoice_number}")

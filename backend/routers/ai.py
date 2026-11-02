@@ -77,6 +77,7 @@ async def identify(body: ImagePayload, user: dict = Depends(auth.require("sell",
     result["similar_products"] = await views(db, user, similar) if not matched else []
     cat = next((c for c in cats if c["name"] == result.get("suggested_category")), None)
     result["suggested_category_id"] = cat["id"] if cat else None
+    result["kind"] = kind  # "plant" (always sold in pieces) or "nursery_product"
     return result
 
 
