@@ -1,13 +1,20 @@
-// App level error boundary, mounted once in app/_layout.tsx. A render crash
-// shows a reload screen instead of a blank app; the error is also logged so
-// it shows up in the Metro output. Do not mount additional boundaries.
+// Error boundaries, both mounted in app/_layout.tsx.
+// - RouteErrorBoundary: one per screen (the root Stack's unstable_screenErrorBoundary, which expo-router passes down
+//   to the tab screens too). A crash in one screen shows "Try again / Go back" in that screen only; the tabs and
+//   every other screen keep working.
+// - ErrorBoundary: the whole app, for a crash outside any screen (a provider, a layout). Shows a reload screen
+//   instead of a blank app.
+// Both log the error (Metro output) and report it to Sentry (src/sentry.ts; nothing is sent when it is off).
 
 import { reloadAppAsync } from "expo";
-import { Component, type ErrorInfo, type PropsWithChildren, useState } from "react";
+import type { ErrorBoundaryProps } from "expo-router";
+import { useRouter } from "expo-router";
+import { Component, type ErrorInfo, type PropsWithChildren, useEffect, useState } from "react";
 import { Platform, Pressable, ScrollView, Text, View } from "react-native";
 
 import i18n from "i18next";
 
+import { reportError } from "@/src/sentry";
 import { makeStyles } from "@/src/theme";
 
 type ErrorBoundaryState = { error: Error | null };
@@ -21,6 +28,7 @@ export class ErrorBoundary extends Component<PropsWithChildren, ErrorBoundarySta
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("[ErrorBoundary] render crash:", error, info.componentStack ?? "");
+    reportError(error, info.componentStack);
   }
 
   resetError = (): void => {
@@ -33,6 +41,39 @@ export class ErrorBoundary extends Component<PropsWithChildren, ErrorBoundarySta
     }
     return this.props.children;
   }
+}
+
+// One screen crashed. expo-router's boundary does not tell anyone, so report it here (once per error).
+export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  const styles = useStyles();
+  const router = useRouter();
+
+  useEffect(() => {
+    console.error("[RouteErrorBoundary] screen crash:", error);
+    reportError(error);
+  }, [error]);
+
+  const leave = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
+  };
+
+  return (
+    <View style={styles.container} testID="route-error">
+      <View style={styles.content}>
+        <Text style={styles.title}>{i18n.t("This screen could not be opened")}</Text>
+        <Text style={styles.message}>{i18n.t("Please try again. If it keeps happening, go back and open it again.")}</Text>
+        {__DEV__ ? <Text style={styles.devMessage}>{error.message}</Text> : null}
+        <Pressable onPress={() => { retry().catch(() => {}); }} testID="route-error-retry" accessibilityRole="button"
+          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
+          <Text style={styles.buttonText}>{i18n.t("Try again")}</Text>
+        </Pressable>
+        <Pressable onPress={leave} testID="route-error-back" accessibilityRole="button" hitSlop={8}>
+          <Text style={styles.detailsToggle}>{i18n.t("Go back")}</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
 }
 
 function ErrorFallback({ error, resetError }: { error: Error; resetError: () => void }) {

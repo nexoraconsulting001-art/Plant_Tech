@@ -1,13 +1,16 @@
 // Owner: More (reports, staff, shop, notifications, categories, supplier bill, shared pictures).
 // Worker: Me (what the owner lets them do, change PIN, log out).
+// Everyone: privacy policy and terms (links from GET /api/config or the build, src/app-config.ts), Delete account.
 import { useState } from "react";
 import { ScrollView, View } from "react-native";
 import Constants from "expo-constants";
 import { useRouter } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { apiGet } from "@/src/api";
+import { useLegalLinks } from "@/src/app-config";
 import { Permission, useAuth } from "@/src/auth";
 import { BrandMark } from "@/src/components/brand";
 import { confirm } from "@/src/confirm";
@@ -31,6 +34,8 @@ export default function More() {
   const { user, isOwner, can, logout } = useAuth();
   const language = useLanguage();
   const [choosing, setChoosing] = useState(false);
+  const legal = useLegalLinks();
+  const open = (url: string) => WebBrowser.openBrowserAsync(url).catch(() => {});
   const staff = useQuery<any[]>({ queryKey: ["staff"], queryFn: () => apiGet("/staff"), enabled: isOwner });
   const shop = user?.business?.name ?? "";
 
@@ -104,7 +109,18 @@ export default function More() {
           left={<MenuIcon name="lock-reset" tint={colors.page} color={colors.inkSoft} />} chevron onPress={() => router.push("/more/password")} />
         <Row title={t("Language")} subtitle={language.label} left={<MenuIcon name="translate" tint={colors.page} color={colors.inkSoft} />}
           chevron onPress={() => setChoosing(true)} testID="more-language" />
+        {!!legal.privacy && (
+          <Row title={t("Privacy policy")} left={<MenuIcon name="shield-lock-outline" tint={colors.page} color={colors.inkSoft} />}
+            right={<Icon name="open-in-new" size={22} color={colors.muted} />} onPress={() => open(legal.privacy)} testID="more-privacy" />
+        )}
+        {!!legal.terms && (
+          <Row title={t("Terms of use")} left={<MenuIcon name="file-document-check-outline" tint={colors.page} color={colors.inkSoft} />}
+            right={<Icon name="open-in-new" size={22} color={colors.muted} />} onPress={() => open(legal.terms)} testID="more-terms" />
+        )}
         <Row title={t("Log out")} left={<MenuIcon name="logout" tint="#FDECEC" color={colors.red} />} onPress={out} testID="more-logout" />
+        <Row title={t("Delete account")} subtitle={isOwner ? t("Close the shop and delete its data") : t("Delete your login")}
+          left={<MenuIcon name="account-remove-outline" tint={colors.page} color={colors.red} />} chevron
+          onPress={() => router.push("/account/delete")} testID="more-delete-account" />
 
         <View style={{ alignItems: "center", gap: 2, marginTop: spacing.lg }}>
           <BrandMark size={36} />

@@ -1,7 +1,7 @@
 import "@/src/i18n";
 
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import { Stack, useNavigationContainerRef } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { LogBox, Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -12,16 +12,22 @@ import { useFonts, Baloo2_700Bold, Baloo2_800ExtraBold } from "@expo-google-font
 import { Mukta_400Regular, Mukta_600SemiBold, Mukta_700Bold, Mukta_800ExtraBold } from "@expo-google-fonts/mukta";
 import { useEffect } from "react";
 
-import { AuthProvider } from "@/src/auth";
+import { AuthProvider, useAuth } from "@/src/auth";
 import { CartProvider } from "@/src/cart-context";
 import { ConfirmHost } from "@/src/confirm";
+import { AppGate } from "@/src/components/app-gate";
 import { CropHost } from "@/src/components/crop-host";
-import { ErrorBoundary } from "@/src/components/error-boundary";
+import { ErrorBoundary, RouteErrorBoundary } from "@/src/components/error-boundary";
 import { ToastProvider } from "@/src/components/toast";
 import { queryClient } from "@/src/query-client";
+import { setReportUser, trackNavigation, wrapRoot } from "@/src/sentry";
 import { colors } from "@/src/theme";
 
-LogBox.ignoreAllLogs(true);
+// Development builds only: hide these known, harmless warnings by their exact opening words. Everything else
+// still shows, so a new warning gets noticed. Add to the list rather than silencing all of them.
+LogBox.ignoreLogs([
+  "[expo-notifications] Push notifications (remote notifications) are unavailable in Expo Go", // Expo Go only
+]);
 const WEB = Platform.OS === "web";
 if (WEB && typeof document !== "undefined") {
   // The browser draws its own focus ring inside our bordered boxes; phones don't, so match them.
@@ -31,7 +37,16 @@ if (WEB && typeof document !== "undefined") {
 }
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-export default function RootLayout() {
+// Error reports carry the logged-in user's id and shop id (src/sentry.ts).
+function ReportUser() {
+  const { user } = useAuth();
+  useEffect(() => setReportUser(user), [user]);
+  return null;
+}
+
+function RootLayout() {
+  const navigationRef = useNavigationContainerRef();
+  useEffect(() => trackNavigation(navigationRef), [navigationRef]);
   const [fontsLoaded, fontError] = useFonts({
     Baloo2_700Bold, Baloo2_800ExtraBold, Mukta_400Regular, Mukta_600SemiBold, Mukta_700Bold, Mukta_800ExtraBold,
   });
@@ -52,10 +67,15 @@ export default function RootLayout() {
           <SafeAreaProvider>
             <KeyboardProvider>
               <AuthProvider>
+                <ReportUser />
                 <CartProvider>
                   <ToastProvider>
                     <StatusBar style="dark" />
-                    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.page } }} />
+                    <AppGate>
+                      {/* A crash inside one screen (tabs included) shows RouteErrorBoundary there; the rest keeps working. */}
+                      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.page } }}
+                        unstable_screenErrorBoundary={RouteErrorBoundary} />
+                    </AppGate>
                     <ConfirmHost />
                     <CropHost />
                   </ToastProvider>
@@ -69,3 +89,5 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+export default wrapRoot(RootLayout);
