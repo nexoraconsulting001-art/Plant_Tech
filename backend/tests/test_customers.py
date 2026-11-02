@@ -75,7 +75,8 @@ def test_bill_keeps_the_customer_address_of_the_day(client):
     assert (got["customer_name"], got["customer_address"]) == ("Meena", "12 Mall Road <b>")
     url = shop.get(f"/api/invoices/{inv['id']}/share").json()["url"]
     public = client.get(url.replace("https://pos.test", "")).text
-    assert "12 Mall Road &lt;b&gt;" in public and "New Colony" not in public
+    # the customer's own link shows an address only on a B2B bill or one of Rs 50,000 or more (WP-9)
+    assert "12 Mall Road" not in public and "New Colony" not in public
     assert _bill(shop, c["id"])["customer_address"] == "New Colony"
 
 

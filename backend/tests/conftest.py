@@ -160,7 +160,7 @@ class Shop:
         self.h = {"Authorization": f"Bearer {self.token}"}
         r = client.put("/api/business", headers=self.h, json={
             "name": f"{name}'s Nursery", "address": "Sector 5", "phone": phone, "gst_registered": gst,
-            "gstin": "06abcde1234f1z5" if gst else "", "upi_id": "shop@upi", "onboarding_done": True})
+            "gstin": "06abcde1234f1z4" if gst else "", "upi_id": "shop@upi", "onboarding_done": True})
         assert r.status_code == 200, r.text
         cats = client.post("/api/categories/bulk", headers=self.h, json={"items": [
             {"name": "Indoor Plants", "gst_percent": 0}, {"name": "Pots", "gst_percent": 18}]}).json()

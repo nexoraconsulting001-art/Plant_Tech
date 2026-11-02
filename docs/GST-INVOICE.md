@@ -87,12 +87,12 @@ comment in `invoice_html.render`). Nothing here removes or changes the toggle. W
 
 ## Wave 2 hooks (for the owner of `sales.py`)
 
-The bill as saved today does not carry HSN or the exempt flag per line, so the printed bill shows them only once
-`sales.py` passes them. Exact changes:
+Steps 1 and 2 were done at integration (2 Nov 2026): new bills carry `hsn` and `exempt` per line, and older bills
+print today's codes. Steps 3 and 4 remain.
 
-1. `_lines()`: add to each line `"hsn": gst.line_hsn(p, cat)` and
+1. Done. `_lines()`: add to each line `"hsn": gst.line_hsn(p, cat)` and
    `"exempt": bool((cat or {}).get("tax_exempt")) and not line["gst_percent"]` (frozen on the bill, like the rate).
-2. `invoice_page_for_print` and `public_bill`: `codes = await gst.bill_codes(db, inv)` and pass
+2. Done. `invoice_page_for_print` and `public_bill`: `codes = await gst.bill_codes(db, inv)` and pass
    `codes=codes` to `invoice_html.render(...)`, so bills saved before step 1 print today's HSN codes.
 3. `price_lines()`: compute the per-line and per-rate tax with `gst.split(lines, discount, total=grand_total,
    inter_state=..., composition=gst.scheme(biz) == "composition")` instead of floats, so the saved `gst_breakup`

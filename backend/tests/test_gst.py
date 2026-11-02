@@ -8,7 +8,7 @@ import pytest
 import db as db_module
 import gst
 import invoice_html
-from conftest import photo_b64, run
+from conftest import Shop, photo_b64, run
 
 HR = "06AAACH0000A1Z"  # a Haryana GSTIN without its check character
 HARYANA = HR + gst.check_char(HR)
@@ -286,11 +286,11 @@ def test_product_hsn_override(client):
     _setup(client, other)
     assert client.get(f"/api/products/{p['id']}/tax", headers=other).status_code == 404
     # employees may read it, only the owner sets it
-    r = client.post("/api/staff", headers=h, json={"name": "Ramesh", "phone": "9822233445", "password": "4821",
+    r = client.post("/api/staff", headers=h, json={"name": "Ramesh", "phone": "9822233445", "password": "482913",
                                                    "permissions": {"sell": True, "stock": True}})
     assert r.status_code == 200, r.text
     worker = {"Authorization": "Bearer " + client.post("/api/auth/login", json={"phone": "9822233445",
-                                                                                 "password": "4821"}).json()["token"]}
+                                                                                 "password": "482913"}).json()["token"]}
     assert client.get(f"/api/products/{p['id']}/tax", headers=worker).status_code == 200
     assert client.put(f"/api/products/{p['id']}/tax", headers=worker, json={"hsn": "0602"}).status_code == 403
 
@@ -404,13 +404,38 @@ def test_printed_and_public_bill_from_the_app(client):
     page = client.get(f"/api/invoices/{inv['id']}/html", headers=h).text
     assert "INVOICE-CUM-BILL OF SUPPLY" in page and "Taxable ₹100 · GST 18% ₹18" in page
     assert "Reverse charge: No" in page and "12 Mall Road" in page and "+919811100066" in page
-    # the HSN codes of bills saved without them (gst.bill_codes, for sales.py to pass in wave 2)
-    codes = run(gst.bill_codes(db_module.state.db, inv))
+    # sales.py freezes each line's HSN on the bill, so the printed bill has the codes at once
+    assert "HSN 6914 · Taxable ₹100" in page and "HSN 0602 · Exempt" in page
+    assert run(gst.bill_codes(db_module.state.db, inv)) == {}  # nothing left to look up
+    # a bill saved before that: today's codes (gst.bill_codes, passed in by sales.py)
+    old = {**inv, "items": [{k: v for k, v in it.items() if k not in ("hsn", "exempt")} for it in inv["items"]]}
+    codes = run(gst.bill_codes(db_module.state.db, old))
     assert codes == {pot["id"]: {"hsn": "6914", "exempt": False}, plant["id"]: {"hsn": "0602", "exempt": True}}
     biz = run(db_module.state.db.businesses.find_one({"id": inv["business_id"]}, {"_id": 0}))
-    with_codes = invoice_html.render(inv, biz, public=False, codes=codes)
+    with_codes = invoice_html.render(old, biz, public=False, codes=codes)
     assert "HSN 6914 · Taxable ₹100" in with_codes and "HSN 0602 · Exempt" in with_codes
     token = client.get(f"/api/invoices/{inv['id']}/share", headers=h).json()["token"]
     public = client.get(f"/i/{token}").text
     assert "+91 XXXXXX0066" in public and "9811100066" not in public and "12 Mall Road" not in public
 
+
+def test_bills_made_in_the_app_carry_hsn_per_line(client):
+    """sales.py freezes each line's HSN and exempt flag on the bill (docs/GST-INVOICE.md, Wave 2 hooks 1 and 2);
+    bills saved before that print today's codes through gst.bill_codes."""
+    shop = Shop(client)
+    plant, pot = shop.product("Snake Plant", 250, 5), shop.product("Clay pot", 118, 5, category="Pots")
+    r = shop.post("/api/invoices", {"items": [
+        {"product_id": plant["id"], "name": "Snake Plant", "quantity": 2, "price": 250},
+        {"product_id": pot["id"], "name": "Clay pot", "quantity": 1, "price": 118},
+        {"product_id": None, "name": "Gift wrap", "quantity": 1, "price": 20}],
+        "customer_phone": "9811100099", "customer_name": "Anita"})
+    assert r.status_code == 200, r.text
+    inv = r.json()
+    lines = [(it.get("hsn"), it.get("exempt")) for it in inv["items"]]
+    assert lines == [("0602", True), ("6914", False), (None, None)]
+    page = shop.get(f"/api/invoices/{inv['id']}/html").text
+    assert "0602" in page and "6914" in page and "Exempt" in page
+    db = db_module.state.db
+    run(db.invoices.update_one({"id": inv["id"]}, {"$unset": {"items.$[].hsn": "", "items.$[].exempt": ""}}))
+    page = shop.get(f"/api/invoices/{inv['id']}/html").text  # an older bill: today's codes
+    assert "0602" in page and "6914" in page and "Exempt" in page

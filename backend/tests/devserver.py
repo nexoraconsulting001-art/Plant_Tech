@@ -82,7 +82,7 @@ async def lifespan(app):
                                             password=os.environ.get("DEV_DEMO_PASSWORD", "local-demo"), is_admin=True)
         await db.businesses.update_one({"id": user["business_id"]}, {"$set": {
             "name": "Green House", "address": "Sector 5, Gurugram", "gst_registered": True,
-            "gstin": "06ABCDE1234F1Z5", "upi_id": "greenhouse@upi", "onboarding_done": True}})
+            "gstin": "06ABCDE1234F1Z4", "upi_id": "greenhouse@upi", "onboarding_done": True}})
         print("dev folder (fake_ai.json):", DEV, flush=True)
         print("demo:", await demo_data.seed(db, PHONE), flush=True)
         yield

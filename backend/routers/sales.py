@@ -44,6 +44,7 @@ from pymongo.errors import DuplicateKeyError
 
 import ai_client
 import auth
+import gst
 import invoice_html
 import rollups
 import storage_client
@@ -299,6 +300,9 @@ def _lines(body: InvoiceIn, bill: _Bill, short: dict[str, float]) -> list[dict]:
         line = {"product_id": l.product_id, "name": l.name.strip(), "quantity": l.quantity, "unit": unit, "price": l.price,
                 "gst_percent": (cat or {}).get("gst_percent", 0) if bill.gst_registered and not bill.gst_removed else 0,
                 "cost_price": (p or {}).get("cost_price", 0)}
+        if p:  # HSN and the exempt flag as on the day, like the rate (gst.py; printed and in GSTR-1)
+            line["hsn"] = gst.line_hsn(p, cat)
+            line["exempt"] = bool((cat or {}).get("tax_exempt")) and not line["gst_percent"]
         if p and money(l.price) != money(p.get("selling_price", 0)):
             line["list_price"] = p.get("selling_price", 0)  # sold at a different price than the shop price
         lines.append(line)
@@ -688,8 +692,10 @@ async def _logo_src(biz: dict) -> str | None:
 @router.get("/invoices/{invoice_id}/html", response_class=HTMLResponse)
 async def invoice_page_for_print(invoice_id: str, user: dict = Depends(auth.require("sell"))):
     inv = await _get_invoice(user, invoice_id)
-    biz = await get_db().businesses.find_one({"id": user["business_id"]}, {"_id": 0}) or {}
-    return HTMLResponse(invoice_html.render(inv, biz, public=False, logo_src=await _logo_src(biz)))
+    db = get_db()
+    biz = await db.businesses.find_one({"id": user["business_id"]}, {"_id": 0}) or {}
+    return HTMLResponse(invoice_html.render(inv, biz, public=False, logo_src=await _logo_src(biz),
+                                            codes=await gst.bill_codes(db, inv)))
 
 
 @public_router.get("/i/{token}", response_class=HTMLResponse, include_in_schema=False)
@@ -702,4 +708,5 @@ async def public_bill(token: str):
         return HTMLResponse("<h1>This bill link has expired</h1><p>Please ask the shop to send the bill again.</p>",
                             status_code=410, headers=PUBLIC_HEADERS)
     biz = await db.businesses.find_one({"id": inv["business_id"]}, {"_id": 0}) or {}
-    return HTMLResponse(invoice_html.render(inv, biz, logo_src=await _logo_src(biz)), headers=PUBLIC_HEADERS)
+    return HTMLResponse(invoice_html.render(inv, biz, logo_src=await _logo_src(biz), codes=await gst.bill_codes(db, inv)),
+                        headers=PUBLIC_HEADERS)
