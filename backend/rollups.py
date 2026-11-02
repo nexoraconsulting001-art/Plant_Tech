@@ -18,11 +18,12 @@ What counts is what the reports always counted: every bill except cancelled ones
 (date_key: a corrected bill keeps the first bill's day, time and maker, see sales.py). apply() looks only at
 the bill's own fields, never at its status: the caller decides the sign.
 
-Reads come from the rollups only when REPORTS_FROM_ROLLUPS is on. It stays off until every place that saves,
-cancels or corrects a bill calls apply() (WP-1); until then reports.py reads the bills. To switch on: deploy
-the code that calls apply(), run `python rollups.py rebuild` (this also covers bills the old version made
-during the deploy), then set REPORTS_FROM_ROLLUPS=1. Anything that writes bills without apply() (demo_data.py's
-seed and refresh) must be followed by `python rollups.py rebuild --business <id>` or `await rollups.rebuild(db, id)`.
+Reads come from the rollups only when REPORTS_FROM_ROLLUPS is on; with it off reports.py reads the bills. Every
+place that saves, cancels or corrects a bill calls apply() (sales.py, WP-1). To switch on: deploy the code that
+calls apply(), run `python rollups.py rebuild` (this also covers bills the old version made during the deploy),
+then set REPORTS_FROM_ROLLUPS=1. Anything that writes bills without apply() must rebuild the shop afterwards
+(`python rollups.py rebuild --business <id>` or `await rollups.rebuild(db, id)`): demo_data.py's seed, refresh and
+remove do.
 """
 import inspect
 import os

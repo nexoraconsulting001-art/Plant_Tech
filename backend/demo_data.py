@@ -20,11 +20,12 @@ from datetime import date, datetime, timedelta, timezone
 
 from pymongo import ReturnDocument
 
+import rollups
 from common import IST, date_key, new_id, normalize_in_phone, now_ist
 from db import get_db
-from routers import library
+from routers import customers, library
 from routers.business import SUGGESTED_CATEGORIES, _create_category
-from routers.products import context
+from routers.products import context, insert_product
 from routers.sales import _next_number, price_lines
 from settings import get_settings
 
@@ -259,6 +260,7 @@ async def remove_demo(db, business_id: str):
     for coll in ("invoices", "stock_history", "products", "customers"):
         await db[coll].delete_many({"business_id": business_id, "demo": True})
     await db.demo_state.delete_many({"business_id": business_id})  # left by older versions of this script
+    await rollups.rebuild(db, business_id)  # the shop's own bills stay in the totals, the demo ones leave
 
 
 async def seed(db, phone: str, now: datetime | None = None, force: bool = False) -> dict:
@@ -282,24 +284,26 @@ async def seed(db, phone: str, now: datetime | None = None, force: bool = False)
 
     opening = datetime(start_day.year, start_day.month, start_day.day, 8, 30, tzinfo=IST)
     items = [(n, b, c, pr, co, st) for n, b, c, pr, co, st, _ in PLANTS] + [(n, "", c, pr, co, st) for n, c, pr, co, st, _ in PRODUCTS]
-    count = await db.products.count_documents({"business_id": bid})
-    for i, (name, botanical, cat, price, cost, stock) in enumerate(items):
+    for name, botanical, cat, price, cost, stock in items:
+        library_id = await library.entry_for_new_product(db, name, cat, bid)
         doc = {
-            "id": new_id(), "business_id": bid, "sku": f"NP-{count + i + 1:04d}", "name": name, "botanical_name": botanical,
-            "category_id": cat_ids[cat], "library_id": await library.entry_for_new_product(db, name, cat, bid),
+            "id": new_id(), "business_id": bid, "name": name, "botanical_name": botanical,
+            "category_id": cat_ids[cat], "library_id": library_id,
             "photo_path": None, "selling_price": price, "cost_price": cost, "stock": stock, "min_stock": 5,
             "supplier": "Green Valley Growers" if cat.endswith("Plants") or cat in ("Succulents", "Herbs") else "Garden Mart",
             "notes": "", "deleted_at": None, "created_at": opening.astimezone(timezone.utc).isoformat(),
             "created_by": shop.owner["id"], "demo": True,
         }
-        await db.products.insert_one(doc)
+        entry = await db.library.find_one({"id": library_id}, library.FIELDS) if library_id else None
+        doc = await insert_product(db, doc, entry)  # the shop's next product code and the search keys
         await shop.stock_entry(doc, stock, stock, "initial", "Opening stock", opening)
 
     for name, _ in CUSTOMERS:
         await db.customers.insert_one({
             "id": new_id(), "business_id": bid, "name": name, "phone": CUSTOMER_PHONE[name], "email": "", "address": "",
             "notes": "", "total_purchases": 0.0, "purchase_count": 0,
-            "created_at": opening.astimezone(timezone.utc).isoformat(), "demo": True})
+            "created_at": opening.astimezone(timezone.utc).isoformat(), "demo": True,
+            **customers.search_fields(name, CUSTOMER_PHONE[name])})
 
     made = 0
     day = start_day
@@ -309,6 +313,7 @@ async def seed(db, phone: str, now: datetime | None = None, force: bool = False)
         # Whole days, today included: the daily refresh then always shows a full "today".
         made += await shop.orders_until(day, datetime(day.year, day.month, day.day, 23, 59, tzinfo=IST))
         day += timedelta(days=1)
+    await rollups.rebuild(db, bid)  # the bills above were written without rollups.apply()
     return {"seeded": True, "products": len(items), "customers": len(CUSTOMERS), "orders": made}
 
 
@@ -347,6 +352,7 @@ async def refresh(db, phone: str, today: date | None = None) -> dict:
     if days <= 0:
         return {"shifted_days": 0}
     bills = await shift_dates(db, shop.bid, days)
+    await rollups.rebuild(db, shop.bid)  # the daily totals follow their bills to the new days
     for name, p in (await shop.products()).items():  # keep the Low / Out of stock badges showing
         if name in SHOWCASE_STOCK:
             await shop.set_stock(p, SHOWCASE_STOCK[name], "adjustment", "Stock count", now_ist())

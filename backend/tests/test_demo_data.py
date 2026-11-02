@@ -12,7 +12,8 @@ from common import now_ist
 NOW = now_ist().replace(hour=15, minute=5, second=0, microsecond=0)
 
 
-def test_seed_refresh_remove(client):
+def test_seed_refresh_remove(client, monkeypatch):
+    monkeypatch.setenv("REPORTS_FROM_ROLLUPS", "1")  # the reports below read the daily rollups the demo rebuilds
     shop = Shop(client)
     own = shop.product("Kopi Plant", 850, 18)
     shop.post("/api/invoices", {"items": [{"product_id": own["id"], "name": "Kopi Plant", "quantity": 1, "price": 850}],
@@ -58,3 +59,4 @@ def test_seed_refresh_remove(client):
     business_id = shop.get("/api/auth/me").json()["business"]["id"]
     run(demo_data.remove_demo(db, business_id))
     assert [p["name"] for p in shop.get("/api/products").json()] == ["Kopi Plant"]
+    assert shop.get("/api/invoices/summary").json()["orders"] == 1  # only the shop's own bill is left in the totals

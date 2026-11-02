@@ -18,13 +18,9 @@ import db as db_module
 import demo_data
 import jobs
 import retention
-import server
 import storage_client
 from common import date_key
 from routers import exports
-
-if not any(getattr(r, "path", "") == "/api/exports/gstr1" for r in server.app.routes):
-    server.app.include_router(exports.router)  # until server.py includes it (see the WP-10 report)
 
 pytestmark = pytest.mark.skipif(MOCK, reason="needs the real replica set")
 BACKEND = Path(__file__).resolve().parent.parent
@@ -110,10 +106,10 @@ def check_gstr1(doc):
 def test_gstr1_json(gst_shop):
     r = gst_shop.get("/api/exports/gstr1", params={"month": MONTH})
     assert r.status_code == 200, r.text
-    assert "attachment" in r.headers["content-disposition"] and "06ABCDE1234F1Z5" in r.headers["content-disposition"]
+    assert "attachment" in r.headers["content-disposition"] and "06ABCDE1234F1Z4" in r.headers["content-disposition"]
     doc = r.json()
     check_gstr1(doc)
-    assert doc["gstin"] == "06ABCDE1234F1Z5" and doc["fp"] == MONTH[5:] + MONTH[:4]
+    assert doc["gstin"] == "06ABCDE1234F1Z4" and doc["fp"] == MONTH[5:] + MONTH[:4]
 
     # intra-state B2C: a and b summed per rate; the cancelled bill c is not there
     assert doc["b2cs"] == [{"sply_ty": "INTRA", "pos": "06", "typ": "OE", "rt": 18, "txval": 354.24,
@@ -133,10 +129,11 @@ def test_gstr1_json(gst_shop):
     assert doc["doc_issue"]["doc_det"] == [{"doc_num": 1, "docs": [
         {"num": 1, "from": "INV-0001", "to": "INV-0005", "totnum": 5, "cancel": 1, "net_issue": 4}]}]
 
-    # No HSN codes yet: one row each under "", flagged; B2B and B2C apart
+    # HSN codes as frozen on each bill line (sales.py; the categories' suggested codes, WP-9); B2B and B2C apart.
+    # Bills without codes (one row each under "", flagged) are in test_gstr1_hsn_and_warnings.
     hsn = doc["hsn"]
-    assert [(h["hsn_sc"], h["rt"], h["txval"]) for h in hsn["hsn_b2b"]] == [("", 18, 200.0)]
-    assert {(h["hsn_sc"], h["rt"]) for h in hsn["hsn_b2c"]} == {("", 0), ("", 18)}
+    assert [(h["hsn_sc"], h["rt"], h["txval"]) for h in hsn["hsn_b2b"]] == [("6914", 18, 200.0)]
+    assert {(h["hsn_sc"], h["rt"]) for h in hsn["hsn_b2c"]} == {("0602", 0), ("6914", 18)}
     # rounding reconciles: the HSN table's tax equals the invoice tables' tax to the paisa
     lines = [i["itm_det"] for e in doc["b2b"] + doc["b2cl"] for inv in e["inv"] for i in inv["itms"]]
     assert tax_of(hsn["hsn_b2b"] + hsn["hsn_b2c"]) == tax_of(lines + doc["b2cs"])
@@ -144,6 +141,9 @@ def test_gstr1_json(gst_shop):
 
 def test_gstr1_hsn_and_warnings(gst_shop):
     cats = {c["name"]: c["id"] for c in gst_shop.get("/api/categories").json()}
+    # bills saved before sales.py froze HSN codes on the bill, in a shop whose Pots category has no code
+    run(db().invoices.update_many({}, {"$unset": {"items.$[].hsn": "", "items.$[].exempt": ""}}))
+    run(db().categories.update_one({"id": cats["Pots"]}, {"$set": {"hsn": ""}}))
     run(db().categories.update_one({"id": cats["Indoor Plants"]}, {"$set": {"hsn": "0602"}}))
     r = gst_shop.get("/api/exports/gstr3b", params={"month": MONTH}).json()
     assert {w["code"] for w in r["warnings"]} == {"hsn_missing"}
@@ -279,16 +279,17 @@ def test_audit_log_read(gst_shop, client):
     gst_shop.get("/api/exports/gstr1", params={"month": MONTH})
     gst_shop.post("/api/exports/shop")
     run(jobs.drain())
-    rows = gst_shop.get("/api/audit-log").json()
+    rows = gst_shop.get("/api/audit-log", params={"action": "export"}).json()  # sign-up and setup log entries too
     assert [r["action"] for r in rows] == ["export.shop", "export.gstr1"]
     assert rows[0]["actor"]["role"] == "owner" and rows[0]["at"].endswith("+00:00")
     assert [r["action"] for r in gst_shop.get("/api/audit-log", params={"action": "export.gstr1"}).json()] == ["export.gstr1"]
     assert len(gst_shop.get("/api/audit-log", params={"action": "export"}).json()) == 2
-    page = gst_shop.get("/api/audit-log", params={"before": rows[0]["at"]}).json()
+    page = gst_shop.get("/api/audit-log", params={"before": rows[0]["at"], "action": "export"}).json()
     assert [r["action"] for r in page] == ["export.gstr1"]
     assert gst_shop.get("/api/audit-log", params={"action": "x$where"}).status_code == 422
     other = Shop(client, phone="9811155667", name="Other")
-    assert other.get("/api/audit-log").json() == []
+    assert {r["business_id"] for r in other.get("/api/audit-log").json()} <= {other.get("/api/auth/me").json()["business"]["id"]}
+    assert other.get("/api/audit-log", params={"action": "export"}).json() == []
     _, worker = gst_shop.worker(reports=True)
     assert client.get("/api/audit-log", headers=worker).status_code == 403
 
@@ -310,7 +311,7 @@ def test_audit_log_in_its_own_database(client, mongo, monkeypatch):
         shop.get("/api/exports/gstr3b", params={"month": MONTH})
         assert mongo[f"{TEST_DB}_audit"].audit_log.count_documents({"action": "export.gstr3b"}) == 1
         assert mongo[TEST_DB].audit_log.count_documents({"action": "export.gstr3b"}) == 0
-        assert [r["action"] for r in shop.get("/api/audit-log").json()] == ["export.gstr3b"]
+        assert [r["action"] for r in shop.get("/api/audit-log", params={"action": "export"}).json()] == ["export.gstr3b"]
     finally:
         mongo.drop_database(f"{TEST_DB}_audit")
 
@@ -320,10 +321,10 @@ def test_audit_daily_archive(client):
     shop.get("/api/exports/gstr3b", params={"month": MONTH})
     today = datetime.now(audit.IST).date()
     rec = run(audit.archive_day(db(), today))
-    assert rec["count"] == 1 and len(rec["sha256"]) == 64
+    assert rec["count"] == run(db().audit_log.count_documents({})) and len(rec["sha256"]) == 64  # sign-up and setup too
     data = (storage_client.LOCAL_DIR / rec["path"]).read_bytes()
     lines = gzip.decompress(data).decode().splitlines()
-    assert json.loads(lines[0])["action"] == "export.gstr3b"
+    assert len(lines) == rec["count"] and json.loads(lines[-1])["action"] == "export.gstr3b"
     assert run(audit.archive_day(db(), today))["skipped"] is True  # once per day
     assert run(audit.archive_day(db(), today - timedelta(days=400)))["count"] == 0
 

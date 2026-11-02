@@ -29,8 +29,8 @@ import push
 import storage_client
 from db import get_db
 from errors import AppError, app_error_handler
-from routers import (ai, auth, business, carts, customers, files, library, notifications, products, purchases,
-                     reports, sales, staff, suppliers)
+from routers import (ai, auth, business, carts, customers, exports, files, library, notifications, products,
+                     purchases, reports, sales, staff, suppliers)
 from settings import check
 
 settings = check()
@@ -60,14 +60,15 @@ async def lifespan(app: FastAPI):
 docs = {} if settings.docs_enabled else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 app = FastAPI(title="NurseryPOS API", lifespan=lifespan, **docs)
 # reports before sales: /api/invoices/summary must not be taken for /api/invoices/{invoice_id}
+# (the /api/account routes come with auth.router)
 for module in (auth, staff, business, library, products, customers, carts, reports, sales, purchases, suppliers, ai,
-               files, notifications):
+               files, notifications, exports):
     app.include_router(module.router)
 app.include_router(sales.public_router)
 app.add_exception_handler(AppError, app_error_handler)
 # Middleware, innermost first: CORS, gzip, the request log line, then the request id around everything.
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_allow_origins, allow_methods=["*"], allow_headers=["*"],
-                   expose_headers=["X-Request-ID"])
+                   expose_headers=["X-Request-ID", "Retry-After", "Idempotent-Replayed"])
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(observability.RequestContextMiddleware)
 app.add_middleware(CorrelationIdMiddleware, header_name="X-Request-ID")
