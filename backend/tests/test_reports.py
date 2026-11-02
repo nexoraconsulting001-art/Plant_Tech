@@ -2,8 +2,8 @@
 
 Golden tests: every report, read from the rollups and from the bills, equals the Python loops the reports
 used to be (copied below as legacy_*), on a shop with cancelled, corrected, old-style and other days' bills.
-`wired` is the app as it will be once sales.py calls rollups.apply() inside its transactions (WP-1): here the
-same calls are made around sales.py's own save and cancel steps.
+`wired` is the app with REPORTS_FROM_ROLLUPS on; sales.py calls rollups.apply() inside the transactions that save,
+cancel and correct a bill (WP-1).
 """
 import importlib
 import statistics
@@ -180,32 +180,9 @@ def same(new, old, path="$"):
         assert new == old, f"{path}: {new!r} != {old!r}"
 
 
-def _wire(monkeypatch):
-    """What WP-1 does inside its transactions: apply each saved bill, take away each cancelled one (and put it back
-    when a failed correction un-cancels it)."""
-    save, mark, unmark = sales._save, sales._mark_cancelled, sales._unmark_cancelled
-
-    async def _save(db, user, body, bill, short, **extra):
-        inv = await save(db, user, body, bill, short, **extra)
-        await rollups.apply(None, db, inv, +1)
-        return inv
-
-    async def _mark_cancelled(db, inv, user, reason):
-        await mark(db, inv, user, reason)
-        await rollups.apply(None, db, inv, -1)
-
-    async def _unmark_cancelled(db, inv):
-        await unmark(db, inv)
-        await rollups.apply(None, db, inv, +1)
-
-    monkeypatch.setattr(sales, "_save", _save)
-    monkeypatch.setattr(sales, "_mark_cancelled", _mark_cancelled)
-    monkeypatch.setattr(sales, "_unmark_cancelled", _unmark_cancelled)
-
-
 @pytest.fixture
 def wired(client, monkeypatch):
-    _wire(monkeypatch)
+    """The app with reports read from the rollups (sales.py calls rollups.apply() inside its transactions)."""
     monkeypatch.setenv("REPORTS_FROM_ROLLUPS", "1")
     return client
 
