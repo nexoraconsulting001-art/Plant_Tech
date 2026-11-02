@@ -259,9 +259,11 @@ export function Segmented<V extends string>({ options, value, onChange }: {
 
 // How many: − / + buttons, and the number itself can be typed (number pad for pieces, decimals for kg,
 // litre, metre). A typed amount is rounded to the unit and kept between min and max (never above MAX_QTY);
-// one over the max shows amber until the field is left, then snaps to the max.
-export function Stepper({ value, onChange, min = 1, max = 9999, decimals, unit, testID }: {
-  value: number; onChange: (v: number) => void; min?: number; max?: number; decimals?: boolean; unit?: string; testID?: string;
+// one over the max shows amber until the field is left, then snaps to the max. onLimit is told when + is
+// pressed at the max or a bigger number was typed (the screen says why, e.g. "Only 3 in stock").
+export function Stepper({ value, onChange, min = 1, max = 9999, decimals, unit, onLimit, testID }: {
+  value: number; onChange: (v: number) => void; min?: number; max?: number; decimals?: boolean; unit?: string; onLimit?: () => void;
+  testID?: string;
 }) {
   const { t } = useTranslation();
   const [text, setText] = useState<string | null>(null); // what is being typed; null when not typing
@@ -285,7 +287,11 @@ export function Stepper({ value, onChange, min = 1, max = 9999, decimals, unit, 
         borderColor: over ? colors.amber : colors.lineStrong, backgroundColor: colors.surface }}>
         <TextInput value={shown} keyboardType={decimals ? "decimal-pad" : "number-pad"} selectTextOnFocus maxFontSizeMultiplier={MAX_FONT_SCALE}
           accessibilityLabel={t("Quantity")} testID={testID ? `${testID}-value` : undefined}
-          onFocus={() => setText(formatQty(value))} onBlur={() => setText(null)}
+          onFocus={() => setText(formatQty(value))}
+          onBlur={() => {
+            if (over) onLimit?.();
+            setText(null);
+          }}
           onChangeText={(v) => {
             const clean = decimals ? v.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1").replace(/(\.\d{3})\d+/, "$1") : v.replace(/\D/g, "");
             setText(clean);
@@ -296,7 +302,8 @@ export function Stepper({ value, onChange, min = 1, max = 9999, decimals, unit, 
             fontFamily: fonts.display, fontSize: 24, color: colors.ink }} />
         {!!unit && <T v="caption" style={{ fontSize: 12, lineHeight: 15 }} testID={testID ? `${testID}-unit` : undefined}>{unit}</T>}
       </View>
-      <Pressable testID={testID ? `${testID}-plus` : undefined} accessibilityLabel={t("Increase quantity")} onPress={() => step(value + 1)}
+      <Pressable testID={testID ? `${testID}-plus` : undefined} accessibilityLabel={t("Increase quantity")}
+        onPress={() => (value >= top && onLimit ? onLimit() : step(value + 1))}
         style={[btn, { backgroundColor: colors.green }]}>
         <Icon name="plus" size={24} color={colors.white} />
       </Pressable>

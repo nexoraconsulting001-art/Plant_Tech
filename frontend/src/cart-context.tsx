@@ -160,7 +160,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setItems((prev) => {
       const had = prev.find((i) => i.product_id === item.product_id);
       if (!had) return [...prev, { ...item, list_price: item.list_price ?? item.price, quantity: fitQty(item, item.quantity) }];
-      const next = { ...had, unit: item.unit ?? had.unit };
+      const next = { ...had, unit: item.unit ?? had.unit, stock: item.stock ?? had.stock }; // the newer stock count
       return prev.map((i) => (i === had ? { ...next, quantity: fitQty(next, had.quantity + item.quantity) } : i));
     });
   const setQuantity = (id: string, qty: number) =>

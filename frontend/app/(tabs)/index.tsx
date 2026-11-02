@@ -1,6 +1,7 @@
 // Home: the shop (its logo, or ours when it has none), New order, and today's numbers. Saved orders are not
 // shown here: a customer's saved items come back when they are picked in New order.
 // The owner sees the whole shop's day; a worker sees their own sales.
+// The owner also sees "Sold below stock": products whose stock went below zero, to count and correct.
 import { Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
@@ -12,11 +13,15 @@ import { useCart } from "@/src/cart-context";
 import { OrderRow, OrderSummary } from "@/src/components/order-row";
 import { Badge, Card, EmptyState, ErrorView, Icon, Screen, SectionTitle, T, Thumb } from "@/src/components/ui";
 import { BrandIcon } from "@/src/components/brand";
-import { formatCurrency } from "@/src/format";
+import { formatCurrency, formatQtyUnit } from "@/src/format";
 import { useRefreshOnFocus } from "@/src/hooks/useRefreshOnFocus";
 import { colors, radius, spacing } from "@/src/theme";
 
-type Today = { scope: "shop" | "mine"; sales: number; orders: number; by_method: Record<"Cash" | "UPI" | "Card", number>; recent: OrderSummary[] };
+type Below = { id: string; name: string; stock: number; unit: string };
+type Today = {
+  scope: "shop" | "mine"; sales: number; orders: number; by_method: Record<"Cash" | "UPI" | "Card", number>; recent: OrderSummary[];
+  below_zero?: Below[]; below_zero_count?: number; // owner only
+};
 
 export default function Home() {
   const { t } = useTranslation();
@@ -107,6 +112,8 @@ export default function Home() {
           </Card>
         )}
 
+        {isOwner && !!d?.below_zero?.length && <BelowZero items={d.below_zero} count={d.below_zero_count ?? d.below_zero.length} />}
+
         {d && (
           <View style={{ gap: spacing.sm }}>
             <SectionTitle right={d.recent.length ? (
@@ -122,5 +129,37 @@ export default function Home() {
         )}
       </ScrollView>
     </Screen>
+  );
+}
+
+// Products sold without enough stock: their count is now below zero. Tap one to add stock or correct it.
+function BelowZero({ items, count }: { items: Below[]; count: number }) {
+  const { t } = useTranslation();
+  const router = useRouter();
+  const shown = items.slice(0, 5);
+  return (
+    <Card style={{ gap: spacing.sm, borderColor: colors.redLine }} testID="home-below-zero">
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+        <Icon name="alert-circle-outline" size={22} color={colors.red} />
+        <T v="bold" style={{ flex: 1 }}>{t("Sold below stock")}</T>
+        {count > shown.length && (
+          <Pressable onPress={() => router.push({ pathname: "/(tabs)/products", params: { stock: "below", at: String(Date.now()) } })} hitSlop={8}
+            style={{ minHeight: 44, justifyContent: "center" }} testID="home-below-zero-all">
+            <T v="bold" color={colors.green}>{t("See all {{n}}", { n: count })}</T>
+          </Pressable>
+        )}
+      </View>
+      <T v="small">{t("These were sold without enough stock. Count them and update the stock.")}</T>
+      <View style={{ borderRadius: radius.md, backgroundColor: colors.page, paddingHorizontal: spacing.lg }}>
+        {shown.map((p, i) => (
+          <Pressable key={p.id} testID={`home-below-${p.name}`} onPress={() => router.push({ pathname: "/products/[id]", params: { id: p.id } })}
+            style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 48, borderTopWidth: i ? 1 : 0, borderTopColor: colors.line }}>
+            <T v="bold" style={{ flex: 1 }}>{p.name}</T>
+            <T v="number" color={colors.red}>{formatQtyUnit(p.stock, p.unit)}</T>
+            <Icon name="chevron-right" size={22} color={colors.muted} />
+          </Pressable>
+        ))}
+      </View>
+    </Card>
   );
 }

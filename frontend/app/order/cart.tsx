@@ -1,5 +1,6 @@
 // The order: change how many, the price for this customer, remove, discount, then take payment.
 // A changed price shows the shop's price struck through; once billed nothing can be changed.
+// More than the stock count: the owner may (a warning shows what the stock will go to), an employee may not.
 import { useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
@@ -9,10 +10,12 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "@/src/auth";
 import { CartItem, isLoose, useCart } from "@/src/cart-context";
 import { DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer";
+import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, EmptyState, Field, Header, Icon, MAX_FONT_SCALE, Screen, Stepper, T, Thumb, Toggle } from "@/src/components/ui";
 import { formatCurrency, plural } from "@/src/format";
+import { askOwner, shortWarning } from "@/src/stock";
 import { colors, fonts, radius, spacing } from "@/src/theme";
-import { unitShort, wholeUnit } from "@/src/units";
+import { MAX_QTY, unitShort, wholeUnit } from "@/src/units";
 
 export default function OrderCart() {
   const { t } = useTranslation();
@@ -72,10 +75,15 @@ export default function OrderCart() {
 function Line({ it }: { it: CartItem }) {
   const { t } = useTranslation();
   const cart = useCart();
+  const toast = useToast();
+  const { isOwner } = useAuth();
   const loose = isLoose(it.product_id);
   const shop = it.list_price ?? it.price;
   const changed = !loose && Math.abs(it.price - shop) > 0.004;
   const whole = wholeUnit(it.unit);
+  const stock = !loose && it.stock != null ? it.stock : null; // when it was added; the Pay screen checks again
+  const short = stock != null && it.quantity > stock + 1e-9;
+  const max = stock == null || isOwner ? MAX_QTY : Math.max(stock, 0);
   return (
     <View testID={`cart-line-${it.name}`} style={{ gap: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
@@ -103,9 +111,19 @@ function Line({ it }: { it: CartItem }) {
           <Icon name="trash-can-outline" size={24} color={colors.red} />
           <T v="bold" color={colors.red}>{t("Remove")}</T>
         </Pressable>
-        <Stepper value={it.quantity} min={0} max={!loose && it.stock != null ? it.stock : 9999} decimals={!whole} unit={unitShort(it.unit)}
-          onChange={(q) => cart.setQuantity(it.product_id, q)} testID={`cart-qty-${it.name}`} />
+        <Stepper value={it.quantity} min={0} max={max} decimals={!whole} unit={unitShort(it.unit)}
+          onChange={(q) => cart.setQuantity(it.product_id, q)} testID={`cart-qty-${it.name}`}
+          onLimit={stock != null && !isOwner ? () => toast.show(askOwner(it.name, stock, it.unit), "error") : undefined} />
       </View>
+      {stock != null && short && (
+        <View testID={`cart-short-${it.name}`} style={{ flexDirection: "row", gap: spacing.sm, padding: spacing.md, borderRadius: radius.md,
+          backgroundColor: isOwner ? colors.amberTint : colors.redTint }}>
+          <Icon name="alert-circle-outline" size={20} color={isOwner ? colors.amberInk : colors.red} />
+          <T v="small" color={isOwner ? colors.amberInk : colors.red} style={{ flex: 1 }}>
+            {isOwner ? shortWarning(it.name, stock, it.quantity, it.unit) : askOwner(it.name, stock, it.unit)}
+          </T>
+        </View>
+      )}
     </View>
   );
 }

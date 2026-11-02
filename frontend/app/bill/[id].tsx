@@ -20,7 +20,7 @@ export default function Bill() {
   const { t } = useTranslation();
   const router = useRouter();
   const toast = useToast();
-  const { user } = useAuth();
+  const { user, isOwner } = useAuth();
   const { id, done } = useLocalSearchParams<{ id: string; done?: string }>();
   const justPaid = done === "1";
   const q = useQuery<Invoice>({ queryKey: ["invoice", id], queryFn: () => apiGet(`/invoices/${id}`) });
@@ -118,6 +118,11 @@ export default function Bill() {
                 {it.list_price != null && it.list_price !== it.price && (
                   <T v="caption" testID={`bill-shop-price-${it.name}`}>
                     {t("Shop price")} <T v="caption" style={{ textDecorationLine: "line-through" }}>{formatCurrency(it.list_price)}</T>
+                  </T>
+                )}
+                {isOwner && !!it.short_qty && (
+                  <T v="caption" color={colors.amberInk} testID={`bill-short-${it.name}`}>
+                    {t("{{n}} sold without stock", { n: formatQtyUnit(it.short_qty, it.unit ?? "pcs") })}
                   </T>
                 )}
               </View>

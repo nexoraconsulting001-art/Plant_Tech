@@ -68,7 +68,8 @@ export default function ProductDetail() {
                 backgroundColor: p.out_of_stock ? "#FDECEC" : p.low_stock ? colors.amberTint : colors.surface }}>
                 <T v="label">{t("In stock")}</T>
                 <T v="title" testID="product-stock" color={p.out_of_stock ? colors.red : colors.ink}>{formatQtyUnit(p.stock, p.unit)}</T>
-                {p.out_of_stock ? <Badge text={t("Out of stock")} tone="red" />
+                {p.stock < 0 ? <T v="caption" color={colors.red} testID="product-below-zero">{t("{{n}} sold without stock", { n: formatQtyUnit(-p.stock, p.unit) })}</T>
+                  : p.out_of_stock ? <Badge text={t("Out of stock")} tone="red" />
                   : p.low_stock ? <T v="caption" color={colors.amberInk}>{t("Low · alert below {{n}}", { n: formatQty(p.min_stock) })}</T>
                   : <T v="caption">{t("Alert below {{n}}", { n: formatQty(p.min_stock) })}</T>}
               </View>
@@ -187,7 +188,7 @@ function StockSheet({ product: p, kind, onClose, onDone }: { product: Product; k
       <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: spacing.md, padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.page }}>
         <T v="bold">{formatQty(p.stock)}</T>
         <Icon name="arrow-right" size={22} color={colors.inkSoft} />
-        <T v="number" color={after < 0 ? colors.red : colors.greenDark}>{formatQtyUnit(Math.max(after, 0), p.unit)}</T>
+        <T v="number" color={after < 0 ? colors.red : colors.greenDark}>{formatQtyUnit(adding ? after : Math.max(after, 0), p.unit)}</T>
         <T v="small">{t("in stock after this")}</T>
       </View>
       {!adding && n > p.stock && <T v="small" color={colors.red}>{t("Only {{n}} in stock", { n: formatQty(p.stock) })}</T>}

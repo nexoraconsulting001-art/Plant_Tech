@@ -1,6 +1,7 @@
 // UPI: the shop's pay QR with the amount filled in. "Money received" makes the bill.
+// short=1: the owner already agreed on the Pay screen to sell below the stock count.
 import { View } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import QRCode from "react-native-qrcode-svg";
 import { useTranslation } from "react-i18next";
@@ -21,6 +22,7 @@ function upiLink(upiId: string, payee: string, amount: number) {
 export default function OrderUpi() {
   const { t } = useTranslation();
   const router = useRouter();
+  const { short } = useLocalSearchParams<{ short?: string }>();
   const cart = useCart();
   const bill = useCreateBill();
   const biz = useQuery<Business>({ queryKey: ["business"], queryFn: () => apiGet("/business") });
@@ -40,7 +42,7 @@ export default function OrderUpi() {
         </View>
       )}
       <BottomBar>
-        <Button title={t("Payment received")} icon="check-bold" onPress={() => bill.create("UPI")} loading={bill.busy}
+        <Button title={t("Payment received")} icon="check-bold" onPress={() => bill.create("UPI", short === "1")} loading={bill.busy}
           disabled={!b || !cart.count} testID="upi-received" />
         <Button title={t("Change payment method")} variant="outline" size="md" onPress={() => router.back()} />
       </BottomBar>

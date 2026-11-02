@@ -1,5 +1,7 @@
 // New order: take a photo (AI finds the product) or type its name.
 // Found → pick how many → add. Not in stock → save it as a new product, or sell it on this bill only.
+// More than the stock count of a product: the owner may, after a warning (it stays a normal line of that
+// product with its GST, and the stock goes below zero); an employee may not.
 // Photos of anything a nursery doesn't sell (or of a bill) are refused with an explanation.
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
@@ -20,9 +22,10 @@ import { useToast } from "@/src/components/toast";
 import { Badge, BottomBar, Button, Field, Header, Icon, Screen, SearchBox, Segmented, Stepper, T, Thumb } from "@/src/components/ui";
 import { formatCurrency, formatQty, formatQtyUnit } from "@/src/format";
 import { CaptureResult, pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
+import { askOwner, shortWarning } from "@/src/stock";
 import { colors, radius, spacing, touch } from "@/src/theme";
 import type { Product } from "@/src/types";
-import { roundQty, unitShort, wholeUnit } from "@/src/units";
+import { MAX_QTY, roundQty, unitShort, wholeUnit } from "@/src/units";
 
 type Stage =
   | { kind: "start" }
@@ -231,20 +234,22 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
   const { t } = useTranslation();
   const router = useRouter();
   const cart = useCart();
-  const { can } = useAuth();
+  const toast = useToast();
+  const { can, isOwner } = useAuth();
   const inCart = cart.items.find((i) => i.product_id === p.id)?.quantity ?? 0;
   const whole = wholeUnit(p.unit);
   const left = Math.max(0, roundQty(p.stock - inCart, false));
   const [qty, setQty] = useState(() => (whole ? 1 : Math.min(1, left) || 1)); // 0.5 kg left: start at 0.5
+  const short = qty > left + 1e-9; // only the owner gets here with more than is left
+  const blocked = !isOwner && left <= 0; // an employee can't sell what isn't in stock
   const conf = confidence === "High" ? { text: t("Strong match"), tone: "green" as const }
     : confidence === "Medium" ? { text: t("Likely match"), tone: "amber" as const }
     : confidence ? { text: t("Please verify"), tone: "red" as const } : null;
 
-  function add(next: "scan" | "cart", loose = false) {
-    cart.addItem(loose
-      ? { product_id: `loose-${Date.now().toString(36)}`, name: p.name, price: p.selling_price, quantity: qty, unit: p.unit }
-      : { product_id: p.id, name: p.name, price: p.selling_price, quantity: qty, gst_percent: p.gst_percent, image_path: p.image_path, stock: p.stock,
-        unit: p.unit });
+  // Always a line of this product (with its GST), even when selling without stock.
+  function add(next: "scan" | "cart") {
+    cart.addItem({ product_id: p.id, name: p.name, price: p.selling_price, quantity: qty, gst_percent: p.gst_percent, image_path: p.image_path,
+      stock: p.stock, unit: p.unit });
     onAdded(next);
   }
 
@@ -274,15 +279,20 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
           </View>
         </View>
 
-        {left > 0 ? (
+        {!blocked && (
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <T v="bodyLarge">{t("Quantity")}</T>
-            <Stepper value={qty} onChange={setQty} min={whole ? 1 : 0.001} max={left} decimals={!whole} unit={unitShort(p.unit)} testID="found-qty" />
+            <Stepper value={qty} onChange={setQty} min={whole ? 1 : 0.001} max={isOwner ? MAX_QTY : left} decimals={!whole} unit={unitShort(p.unit)}
+              onLimit={isOwner ? undefined : () => toast.show(askOwner(p.name, p.stock, p.unit), "error")} testID="found-qty" />
           </View>
-        ) : (
-          <View style={{ gap: spacing.md, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.amberTint }}>
-            <T v="bold" color={colors.amberInk}>{t("Out of stock")}</T>
-            <T v="small" color={colors.amberInk}>{t("You can still sell it if you have it on hand. Update the stock count afterwards.")}</T>
+        )}
+        {(blocked || short) && (
+          <View testID="found-short" style={{ gap: spacing.md, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: blocked ? colors.redTint : colors.amberTint }}>
+            <T v="bold" color={blocked ? colors.red : colors.amberInk}>{p.stock > 0 ? t("Not enough stock") : t("Out of stock")}</T>
+            <T v="small" color={blocked ? colors.red : colors.amberInk}>
+              {blocked ? askOwner(p.name, p.stock, p.unit) : shortWarning(p.name, p.stock, inCart + qty, p.unit)}
+            </T>
+            {!blocked && <T v="small" color={colors.amberInk}>{t("You can still sell it if you have it on hand. Update the stock count afterwards.")}</T>}
             {can("stock") && (
               <Button title={t("Add stock")} icon="package-variant-plus" variant="outline" size="md"
                 onPress={() => router.push({ pathname: "/products/[id]", params: { id: p.id } })} />
@@ -295,15 +305,19 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
         </Pressable>
       </ScrollView>
       <BottomBar>
-        {left > 0 ? (
+        {blocked ? (
+          <Button title={t("Search another item")} icon="magnify" variant="outline" onPress={onBack} testID="found-search-again" />
+        ) : (
           <>
             <Button title={t("Add and scan next")} icon="camera" variant="outline" size="md" onPress={() => add("scan")} testID="found-add-next" />
-            <Button title={t("Add to order · {{total}}", { total: formatCurrency(p.selling_price * qty) })} icon="cart-plus"
-              onPress={() => add("cart")} testID="found-add" />
+            {short ? (
+              <Button title={t("Sell without stock · {{total}}", { total: formatCurrency(p.selling_price * qty) })} icon="cart-plus"
+                onPress={() => add("cart")} testID="found-sell-anyway" />
+            ) : (
+              <Button title={t("Add to order · {{total}}", { total: formatCurrency(p.selling_price * qty) })} icon="cart-plus"
+                onPress={() => add("cart")} testID="found-add" />
+            )}
           </>
-        ) : (
-          <Button title={t("Sell without stock · {{total}}", { total: formatCurrency(p.selling_price * qty) })} icon="cart-plus"
-            onPress={() => add("cart", true)} testID="found-sell-anyway" />
         )}
       </BottomBar>
     </Screen>

@@ -1,6 +1,7 @@
 """Products (plants, pots, soil, tools) and their stock.
 
-A product stays in the list at 0 stock; it is only removed when the owner deletes it.
+A product stays in the list at 0 stock; it is only removed when the owner deletes it. Stock can go below
+zero when the owner bills more than was counted (see sales.py); such a product counts as out of stock.
 Each product has a unit (pieces, kg, litre…, see units.py); plants are always pieces.
 Pictures: the shop's own photo if it has one, else the shared library picture.
 """
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
 
 import auth
+import notify
 from common import name_key, new_id, now_iso
 from db import get_db
 from routers import library
@@ -56,6 +58,7 @@ async def record_stock(db, user: dict, product: dict, change: float, new_stock: 
         "id": new_id(), "business_id": user["business_id"], "product_id": product["id"],
         "product_name": product["name"], "change": change, "new_stock": new_stock, "type": kind, "reason": reason,
         "by": {"id": user["id"], "name": user.get("name", "")}, "created_at": now_iso()})
+    await notify.stock_changed(db, user["business_id"], product, new_stock - change, new_stock)
 
 
 async def context(db, business_id: str):
@@ -117,10 +120,13 @@ async def _check_category(db, user: dict, category_id: str | None) -> dict | Non
 
 
 @router.get("")
-async def list_products(search: str = "", category_id: str = "", low: bool = False,
+async def list_products(search: str = "", category_id: str = "", low: bool = False, ids: str = "",
                         user: dict = Depends(auth.require("sell", "stock"))):
+    """`ids` (comma separated) = just these products, e.g. the fresh stock of an order's items before paying."""
     db = get_db()
     q: dict = {"business_id": user["business_id"], "deleted_at": None}
+    if ids:
+        q["id"] = {"$in": [i for i in ids.split(",") if i][:200]}
     if category_id:
         q["category_id"] = category_id
     products = await db.products.find(q, {"_id": 0}).sort("name", 1).to_list(5000)

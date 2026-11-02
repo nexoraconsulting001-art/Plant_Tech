@@ -1,9 +1,10 @@
 // Products: search plus Category, Stock and Sort filters. A product stays here at 0 stock
 // (marked Out of stock) until the owner deletes it. Search runs on the server, so Hindi, Hinglish and
-// English names all find a product ("गुलाब", "gulab", "rose").
+// English names all find a product ("गुलाब", "gulab", "rose"). Stock below zero (sold without enough
+// stock, owner only) shows in red and has its own filter; Home's "Sold below stock" opens it (?stock=below).
 import { useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, RefreshControl, ScrollView, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
@@ -17,16 +18,22 @@ import { useRefreshOnFocus } from "@/src/hooks/useRefreshOnFocus";
 import { colors, radius, spacing } from "@/src/theme";
 import type { Product } from "@/src/types";
 
-type StockFilter = "" | "in" | "low" | "out";
+type StockFilter = "" | "in" | "low" | "out" | "below";
 type Sort = "name" | "price-up" | "price-down" | "stock-up" | "new";
 
 export default function Products() {
   const { t } = useTranslation();
   const router = useRouter();
   const { can } = useAuth();
+  const { stock: asked, at } = useLocalSearchParams<{ stock?: string; at?: string }>(); // at: each tap on Home sets it again
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [stock, setStock] = useState<StockFilter>("");
+  const [openedAt, setOpenedAt] = useState<string | undefined>(undefined); // the Home tap already applied
+  if (asked === "below" && at !== openedAt) {
+    setOpenedAt(at);
+    setStock("below");
+  }
   const [sort, setSort] = useState<Sort>("name");
   const [sheet, setSheet] = useState<"" | "category" | "stock" | "sort">("");
   const q = useQuery<Product[]>({ queryKey: ["products"], queryFn: () => apiGet("/products") });
@@ -47,11 +54,13 @@ export default function Products() {
   const counts = {
     low: all.filter((p) => p.low_stock && !p.out_of_stock).length,
     out: all.filter((p) => p.out_of_stock).length,
+    below: all.filter((p) => p.stock < 0).length,
   };
   const shown = useMemo(() => {
     const list = (term ? found.data ?? [] : all).filter((p) =>
       (!category || p.category_id === category)
-      && (stock === "" || (stock === "in" && !p.low_stock) || (stock === "low" && p.low_stock && !p.out_of_stock) || (stock === "out" && p.out_of_stock)));
+      && (stock === "" || (stock === "in" && !p.low_stock) || (stock === "low" && p.low_stock && !p.out_of_stock) || (stock === "out" && p.out_of_stock)
+        || (stock === "below" && p.stock < 0)));
     const by: Record<Sort, (a: Product, b: Product) => number> = {
       name: (a, b) => a.name.localeCompare(b.name),
       "price-up": (a, b) => a.selling_price - b.selling_price,
@@ -66,7 +75,9 @@ export default function Products() {
     { v: "", label: t("All stock") },
     { v: "in", label: t("In stock"), sub: t("Above the alert level") },
     { v: "low", label: t("Low stock · {{n}}", { n: counts.low }), sub: t("At or below the low-stock alert level") },
-    { v: "out", label: t("Out of stock · {{n}}", { n: counts.out }) },
+    { v: "out", label: t("Out of stock · {{n}}", { n: counts.out }), sub: counts.below ? t("Includes stock below zero") : undefined },
+    ...(counts.below || stock === "below"
+      ? [{ v: "below" as const, label: t("Below zero · {{n}}", { n: counts.below }), sub: t("Sold without enough stock") }] : []),
   ];
   const SORTS: { v: Sort; label: string }[] = [
     { v: "name", label: t("Name A–Z") }, { v: "price-up", label: t("Price: low to high") }, { v: "price-down", label: t("Price: high to low") },
@@ -123,7 +134,8 @@ export default function Products() {
                 <T v="small">{[formatCurrency(p.selling_price), p.category && t(p.category)].filter(Boolean).join(" · ")}</T>
               </View>
               <View style={{ alignItems: "flex-end" }}>
-                {p.out_of_stock ? <Badge text={t("Out of stock")} tone="red" />
+                {p.stock < 0 ? <><T v="number" color={colors.red}>{formatQty(p.stock)}</T><T v="caption" color={colors.red}>{t("below zero")}</T></>
+                  : p.out_of_stock ? <Badge text={t("Out of stock")} tone="red" />
                   : p.low_stock ? <Badge text={t("Low · {{n}}", { n: formatQty(p.stock) })} tone="amber" />
                   : <><T v="number">{formatQty(p.stock)}</T><T v="caption">{t("in stock")}</T></>}
               </View>

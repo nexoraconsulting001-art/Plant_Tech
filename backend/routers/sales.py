@@ -1,6 +1,11 @@
 """Orders (bills): create with stock deduction and tax-inclusive GST, list, share link, today, reports.
 
 Workers see only the orders they made; owners (and workers with the reports permission) see all.
+
+Selling more than the stock on hand: only the owner may, and only when the app says so (`allow_short`, sent
+after the owner saw "Stock will go to -2" and went ahead). The stock then goes below zero and each such line
+keeps `short_qty`, how much of it was not in stock. Everyone else, and app versions that don't send
+`allow_short`, get the usual 400 out_of_stock.
 """
 import base64
 import os
@@ -46,6 +51,7 @@ class InvoiceIn(BaseModel):
     discount: float = Field(0, ge=0)
     payment_method: Literal["Cash", "UPI", "Card"] = "Cash"
     gst_removed: bool = False  # owner only: same total, no GST on this bill
+    allow_short: bool = False  # owner only: bill even if stock goes below zero (ignored for employees)
 
 
 def price_lines(lines: list[dict], discount: float) -> dict:
@@ -100,6 +106,7 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
     bid = user["business_id"]
     cats, gst_registered = await context(db, bid)
     gst_removed = body.gst_removed and gst_registered and auth.can(user, "owner")
+    allow_short = body.allow_short and auth.can(user, "owner")  # the role decides, never the app alone
     ids = list({l.product_id for l in body.items if l.product_id})
     products = {p["id"]: p for p in await db.products.find(
         {"business_id": bid, "id": {"$in": ids}, "deleted_at": None}, {"_id": 0}).to_list(len(ids) or 1)}
@@ -129,24 +136,32 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
                             "email": "", "address": "", "notes": "", "total_purchases": 0.0, "purchase_count": 0,
                             "created_at": now_iso()}
 
-    # Take the stock first; give it back if any product doesn't have enough.
+    # Take the stock first; give it back if any product doesn't have enough (unless the owner allowed that).
     taken: list[tuple[str, float]] = []
     wanted: dict[str, float] = {}
+    short: dict[str, float] = {}  # product -> how much of this sale was not in stock
     for l in body.items:
         if l.product_id:
             wanted[l.product_id] = wanted.get(l.product_id, 0) + l.quantity
     for pid, qty in wanted.items():
-        updated = await db.products.find_one_and_update(
-            {"id": pid, "business_id": bid, "stock": {"$gte": qty}}, {"$inc": {"stock": -qty}},
-            projection={"_id": 0}, return_document=ReturnDocument.AFTER)
-        if updated is None:
+        q = {"id": pid, "business_id": bid}
+        if not allow_short:
+            q["stock"] = {"$gte": qty}
+        # BEFORE: the filter is checked on the stock before the sale (mongomock re-checks it on AFTER)
+        found = await db.products.find_one_and_update(q, {"$inc": {"stock": -qty}},
+                                                      projection={"_id": 0}, return_document=ReturnDocument.BEFORE)
+        if found is None:
             for back_id, back_qty in taken:
                 await db.products.update_one({"id": back_id}, {"$inc": {"stock": back_qty}})
             p = products[pid]
             have = (await db.products.find_one({"id": pid}, {"stock": 1})) or {}
             raise AppError(400, "Only {{n}} {{name}} left in stock.", "out_of_stock", n=f"{have.get('stock', 0):g}", name=p["name"])
         taken.append((pid, qty))
-        await record_stock(db, user, updated, -qty, updated["stock"], "sale")
+        before = found.get("stock", 0)
+        if missing_qty := round(qty - min(max(before, 0), qty), 3):
+            short[pid] = missing_qty
+        after = round(before - qty, 3)
+        await record_stock(db, user, {**found, "stock": after}, -qty, after, "sale")
 
     lines = []
     for l, unit in zip(body.items, units):
@@ -158,6 +173,10 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
         if p and money(l.price) != money(p.get("selling_price", 0)):
             line["list_price"] = p.get("selling_price", 0)  # sold at a different price than the shop price
         lines.append(line)
+    for line in reversed(lines):  # the short amount goes on the product's last lines (usually its only one)
+        if left := short.get(line["product_id"] or ""):
+            line["short_qty"] = min(left, line["quantity"])
+            short[line["product_id"]] = round(left - line["short_qty"], 3)
     totals = price_lines(lines, body.discount)
 
     if new_customer:
@@ -315,15 +334,23 @@ async def public_bill(token: str):
 
 @router.get("/dashboard/today")
 async def today(user: dict = Depends(auth.require("sell"))):
-    """Home screen: today's sales and orders. Workers see only their own."""
-    invs = await get_db().invoices.find({**_scope(user), "date_key": date_key()},
-                                        {"_id": 0}).sort("created_at", -1).to_list(5000)
+    """Home screen: today's sales and orders. Workers see only their own.
+    The owner also gets `below_zero`: products sold below their stock count, most short first."""
+    db = get_db()
+    invs = await db.invoices.find({**_scope(user), "date_key": date_key()},
+                                  {"_id": 0}).sort("created_at", -1).to_list(5000)
     by_method = {"Cash": 0.0, "UPI": 0.0, "Card": 0.0}
     for i in invs:
         by_method[i.get("payment_method", "Cash")] = by_method.get(i.get("payment_method", "Cash"), 0) + i["grand_total"]
-    return {"scope": "shop" if _sees_all(user) else "mine", "date": date_key(),
-            "sales": money(sum(i["grand_total"] for i in invs)), "orders": len(invs),
-            "by_method": {k: money(v) for k, v in by_method.items()}, "recent": [_summary(i) for i in invs[:20]]}
+    out = {"scope": "shop" if _sees_all(user) else "mine", "date": date_key(),
+           "sales": money(sum(i["grand_total"] for i in invs)), "orders": len(invs),
+           "by_method": {k: money(v) for k, v in by_method.items()}, "recent": [_summary(i) for i in invs[:20]]}
+    if auth.can(user, "owner"):
+        q = {"business_id": user["business_id"], "deleted_at": None, "stock": {"$lt": 0}}
+        below = await db.products.find(q, {"_id": 0, "id": 1, "name": 1, "stock": 1, "unit": 1}).sort("stock", 1).to_list(20)
+        out["below_zero"] = [{**p, "unit": unit_of(p.get("unit"))} for p in below]
+        out["below_zero_count"] = await db.products.count_documents(q)
+    return out
 
 
 def _report_buckets(range_: str, anchor: date) -> tuple[list[str], list[str], callable]:

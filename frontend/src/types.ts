@@ -28,6 +28,7 @@ export type InvoiceLine = {
   product_id: string | null; name: string; quantity: number; price: number; gst_percent: number;
   unit?: Unit; // none on bills made before units existed
   list_price?: number; // the shop price, kept when this bill gave a different price
+  short_qty?: number; // how much of this line was not in stock (the owner billed it anyway)
   amount: number; net: number; tax: number;
 };
 
