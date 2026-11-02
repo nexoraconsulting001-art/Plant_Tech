@@ -79,7 +79,7 @@ async def lifespan(app):
     async with original(app):
         db = db_module.get_db()
         user = await auth_router._new_owner(db, name="Demo Owner", phone=normalize_in_phone(PHONE),
-                                            password=os.environ.get("DEV_DEMO_PASSWORD", "local-demo"))
+                                            password=os.environ.get("DEV_DEMO_PASSWORD", "local-demo"), is_admin=True)
         await db.businesses.update_one({"id": user["business_id"]}, {"$set": {
             "name": "Green House", "address": "Sector 5, Gurugram", "gst_registered": True,
             "gstin": "06ABCDE1234F1Z5", "upi_id": "greenhouse@upi", "onboarding_done": True}})

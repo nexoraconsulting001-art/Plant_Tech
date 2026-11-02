@@ -311,6 +311,6 @@ def test_audit_log(client):
     db = db_module.state.db
     user = {"id": me["id"], "business_id": me["business"]["id"], "role": "owner"}
     run(audit.log(db, user, "staff.disable", {"type": "user", "id": "u1"}, {"reason": "left"}))
-    entry = run(db.audit_log.find_one({}, {"_id": 0}))
+    entry = run(db.audit_log.find_one({"action": "staff.disable"}, {"_id": 0}))
     assert entry["action"] == "staff.disable" and entry["business_id"] == user["business_id"]
     assert entry["actor"] == {"id": me["id"], "role": "owner"} and entry["target"]["id"] == "u1"

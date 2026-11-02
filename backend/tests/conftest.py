@@ -148,10 +148,14 @@ def photo_b64(size=(1200, 900), fmt="JPEG", color=(30, 120, 40)) -> str:
 class Shop:
     """An owner logged in to a shop that finished setup, with helpers for common calls."""
 
-    def __init__(self, client, phone="9811122334", name="Suresh", gst=True):
+    def __init__(self, client, phone="9811122334", name="Suresh", gst=True, admin=False):
         self.c = client
         r = client.post("/api/auth/register", json={"name": name, "phone": phone, "password": "secret123"})
         assert r.status_code == 200, r.text
+        if admin:  # app-admin rights are the login's is_admin flag (WP-8), as `python -m manage_users admin grant` sets it
+            import manage_users
+
+            run(manage_users.set_admin(db_module.state.db, phone, True))
         self.token = r.json()["token"]
         self.h = {"Authorization": f"Bearer {self.token}"}
         r = client.put("/api/business", headers=self.h, json={
@@ -174,7 +178,7 @@ class Shop:
         assert r.status_code == 200, r.text
         return r.json()
 
-    def worker(self, phone="9822233445", pin="4821", **perms):
+    def worker(self, phone="9822233445", pin="482913", **perms):
         r = self.post("/api/staff", {"name": "Ramesh", "phone": phone, "password": pin,
                                      "permissions": {"sell": True, "stock": True, "customers": True,
                                                      "reports": False, **perms}})

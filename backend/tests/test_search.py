@@ -154,7 +154,7 @@ def test_shop_entries_are_private_until_approved(client):
     # The same name typed by shop B is linked to the same entry (one entry per name), still private.
     pb = b.product("Kokedama moss ball", 400, 1)
     assert pb["library_id"] == pa["library_id"]
-    admin = Shop(client, phone="9000000001", name="Admin")
+    admin = Shop(client, phone="9000000001", name="Admin", admin=True)
     waiting = admin.get("/api/admin/library", params={"visibility": "private"}).json()
     assert [e["name"] for e in waiting] == ["Kokedama Moss Ball"] and waiting[0]["public"] is False
     admin.post(f"/api/admin/library/{pa['library_id']}/approve")
@@ -185,7 +185,7 @@ def test_cleaned_name_links_and_entry_has_no_phone(client):
 
 def test_library_cache_follows_changes(client):
     shop = Shop(client)
-    admin = Shop(client, phone="9000000001", name="Admin")
+    admin = Shop(client, phone="9000000001", name="Admin", admin=True)
     rose = _lib_id(shop, "rose")
     assert client.patch(f"/api/admin/library/{rose}", headers=admin.h, json={"name_hi": "रोज़ा"}).status_code == 200
     assert shop.get("/api/products/suggest", params={"q": "रोज़ा"}).json()["library"][0]["id"] == rose

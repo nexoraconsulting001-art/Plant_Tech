@@ -28,7 +28,7 @@ def test_first_shop_photo_becomes_shared_picture(client):
     assert entry["image_status"] == "none" and entry["image_path"] is None
     pb = b.post("/api/products", {"name": "Tulsi", "library_id": lib_id, "selling_price": 70}).json()
     assert pb["image_source"] is None
-    admin = Shop(client, phone="9000000001")
+    admin = Shop(client, phone="9000000001", admin=True)
     live = admin.post(f"/api/admin/library/{lib_id}/approve").json()
     assert live["image_status"] == "live" and live["image_path"]
     pb = b.get(f"/api/products/{pb['id']}").json()
@@ -42,7 +42,7 @@ def test_new_product_starts_a_library_entry(client):
     p = a.product("Ceramic Pot 10 inch", 150, 4, category="Pots")
     # Private to shop A until an app admin approves it; then every shop finds it.
     assert b.get("/api/products/suggest", params={"q": "ceramic"}).json()["library"] == []
-    admin = Shop(client, phone="9000000001", name="Admin")
+    admin = Shop(client, phone="9000000001", name="Admin", admin=True)
     assert admin.post(f"/api/admin/library/{p['library_id']}/publish").status_code == 200
     assert b.get("/api/products/suggest", params={"q": "ceramic"}).json()["library"][0]["name"] == "Ceramic Pot 10 inch"
 
@@ -73,7 +73,7 @@ def test_categories_gst_rules(client):
 def test_admin_library_needs_admin(client):
     shop = Shop(client)
     assert shop.get("/api/admin/library").status_code == 403
-    admin = Shop(client, phone="9000000001", name="Admin")
+    admin = Shop(client, phone="9000000001", name="Admin", admin=True)
     entries = admin.get("/api/admin/library", params={"status": "none"}).json()
     assert len(entries) == 10
     eid = entries[0]["id"]

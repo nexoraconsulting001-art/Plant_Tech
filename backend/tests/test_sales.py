@@ -249,7 +249,7 @@ def test_employee_report_shows_who_billed_what(client):
     shop = Shop(client, gst=False)
     plant = shop.product("Jade", 200, 50)
     ramesh, rh = shop.worker()
-    old = shop.post("/api/staff", {"name": "Old hand", "phone": "9811177711", "password": "4821"}).json()
+    old = shop.post("/api/staff", {"name": "Old hand", "phone": "9811177711", "password": "731904"}).json()
 
     def bill(headers, q, price=200, phone="9811100099"):
         r = client.post("/api/invoices", headers=headers, json={
