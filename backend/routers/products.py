@@ -10,11 +10,12 @@ from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
 
 import auth
-import notify
+import catalog_search
+from catalog_search import library_images
 from common import name_key, new_id, now_iso
 from db import get_db
 from routers import library
-from search import product_terms, search_score
+from stock import STOCK_EPS, record_stock, settle_stock  # noqa: F401 (also imported from here by older code)
 from units import Unit, is_plant_category, unit_of
 
 router = APIRouter(prefix="/api/products", tags=["products"])
@@ -53,42 +54,11 @@ class StockIn(BaseModel):
     reason: str = Field("Added", max_length=80)
 
 
-STOCK_EPS = 1e-9  # "enough stock" allows for float noise in stock saved before settle_stock existed
-
-
-async def settle_stock(db, product: dict) -> dict:
-    """Keep stock on 3 decimals after a change ($inc). 0.7 kg less 0.4 is 0.29999999999999993 in floating point:
-    unrounded, the last 0.3 kg could not be sold and selling it would leave a tiny stock below zero. Rounds only
-    if nothing changed the stock since (another sale settles its own result). Returns the product as rounded."""
-    raw = product.get("stock", 0)
-    exact = round(raw, 3) or 0.0  # no -0.0
-    if exact != raw:
-        await db.products.update_one({"id": product["id"], "stock": raw}, {"$set": {"stock": exact}})
-    return {**product, "stock": exact}
-
-
-async def record_stock(db, user: dict, product: dict, change: float, new_stock: float, kind: str, reason: str = "",
-                       bill: str = ""):
-    """kind: initial, sale, adjustment, purchase, bill_cancel or bill_correct (`bill` = the bill's number for these two)."""
-    await db.stock_history.insert_one({
-        "id": new_id(), "business_id": user["business_id"], "product_id": product["id"],
-        "product_name": product["name"], "change": change, "new_stock": new_stock, "type": kind, "reason": reason,
-        **({"bill": bill} if bill else {}), "by": {"id": user["id"], "name": user.get("name", "")}, "created_at": now_iso()})
-    await notify.stock_changed(db, user["business_id"], product, new_stock - change, new_stock)
-
-
 async def context(db, business_id: str):
     """Categories and shop GST setting needed to show products."""
     cats = {c["id"]: c for c in await db.categories.find({"business_id": business_id}, {"_id": 0}).to_list(1000)}
     biz = await db.businesses.find_one({"id": business_id}, {"_id": 0, "gst_registered": 1}) or {}
     return cats, bool(biz.get("gst_registered"))
-
-
-async def library_images(db, products: list[dict]) -> dict:
-    ids = list({p["library_id"] for p in products if p.get("library_id")})
-    if not ids:
-        return {}
-    return {e["id"]: e for e in await db.library.find({"id": {"$in": ids}}, {"_id": 0}).to_list(len(ids))}
 
 
 def view(p: dict, cats: dict, lib: dict, gst_registered: bool, user: dict) -> dict:
@@ -147,33 +117,20 @@ async def list_products(search: str = "", category_id: str = "", low: bool = Fal
         q["category_id"] = category_id
     products = await db.products.find(q, {"_id": 0}).sort("name", 1).to_list(5000)
     if search.strip():
-        products = await _search(db, products, search)
+        products = await catalog_search.search_products(db, products, search)
     if low:
         products = [p for p in products if p.get("stock", 0) <= p.get("min_stock", 0)]
     return await views(db, user, products)
 
 
-async def _search(db, products: list[dict], query: str) -> list[dict]:
-    """Products matching what was typed, in English, Hindi or Hinglish; best matches first."""
-    lib = await library_images(db, products)
-    scored = [(s, p) for p in products if (s := search_score(query, product_terms(p, lib.get(p.get("library_id")))))]
-    scored.sort(key=lambda sp: (-sp[0], sp[1]["name"].lower()))
-    return [p for _, p in scored]
+_search = catalog_search.search_products  # moved; the old name stays for older imports
 
 
 @router.get("/suggest")
 async def suggest(q: str, user: dict = Depends(auth.require("sell", "stock"))):
     """Typing a product name: the shop's own matches first, then the shared library."""
     db = get_db()
-    if len(name_key(q)) < 2:
-        return {"own": [], "library": []}
-    own = await _search(db, await db.products.find({"business_id": user["business_id"], "deleted_at": None},
-                                                   {"_id": 0}).to_list(5000), q)
-    own = own[:5]
-    taken_ids = {p.get("library_id") for p in own}
-    taken_names = {name_key(p["name"]) for p in own}
-    lib = [e for e in await library.search(db, q, user["business_id"], limit=8)
-           if e["id"] not in taken_ids and name_key(e["name"]) not in taken_names][:5]
+    own, lib = await catalog_search.suggest(db, user["business_id"], q)
     return {"own": await views(db, user, own), "library": lib}
 
 

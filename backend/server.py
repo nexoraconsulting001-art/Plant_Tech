@@ -24,7 +24,7 @@ import storage_client  # noqa: E402
 from db import get_db  # noqa: E402
 from errors import AppError, app_error_handler  # noqa: E402
 from routers import (ai, auth, business, carts, customers, files, library, notifications, products, purchases,  # noqa: E402
-                     sales, staff, suppliers)
+                     reports, sales, staff, suppliers)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -83,8 +83,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NurseryPOS API", lifespan=lifespan)
-for module in (auth, staff, business, library, products, customers, carts, sales, purchases, suppliers, ai, files,
-               notifications):
+# reports before sales: /api/invoices/summary must not be taken for /api/invoices/{invoice_id}
+for module in (auth, staff, business, library, products, customers, carts, reports, sales, purchases, suppliers, ai,
+               files, notifications):
     app.include_router(module.router)
 app.include_router(sales.public_router)
 app.add_exception_handler(AppError, app_error_handler)
