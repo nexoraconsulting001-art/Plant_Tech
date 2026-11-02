@@ -1,7 +1,13 @@
-"""AI: identify a plant from a photo, read a supplier bill. Limited per shop per day.
+"""AI: identify a plant from a photo, read a supplier bill. Limited per shop per day and per user per minute.
 
 Photos that are not what the screen expects are refused with a clear message (and a `code` the app
 uses to offer the right next step): a laptop in Add items, a bill in Add items, a plant on Supplier bill.
+
+Allowances: one `ai_usage` document per shop, period and kind ({business_id, period, kind}, unique; migration
+0601), counted before the call and given back when Claude was never reached. Today every shop gets
+AI_DAILY_LIMIT scans a day, plant photos and bill pages together (kind "scan"), as before. Plan allowances
+(decision D4: e.g. a trial's daily scans, paid tiers' monthly ones) only need `allowance` to answer
+differently. A user may also start at most AI_USER_RATE scans (ratelimit.py, default 20 a minute).
 """
 import logging
 import os
@@ -11,9 +17,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 import ai_client
 import auth
+import ratelimit
 import storage_client
 from common import date_key, name_key
 from db import get_db
@@ -23,43 +31,68 @@ from routers.products import views
 from routers.purchases import MAX_PAGES
 from routers.suppliers import clean_gstin, supplier_key
 from search import best_product
+from settings import get_settings
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 logger = logging.getLogger(__name__)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+SCAN = "scan"  # the allowance plant photos and bill pages share
+NAME_FIELDS = {"_id": 0, "id": 1, "name": 1, "botanical_name": 1}  # all that best_product reads
 
 
 class ImagePayload(BaseModel):
     image_base64: str = Field(max_length=MAX_IMAGE_BYTES * 4 // 3 + 64)
 
 
-async def use_quota(db, business_id: str, n: int = 1):
-    limit = int(os.environ.get("AI_DAILY_LIMIT", "300"))
-    doc = await db.ai_usage.find_one_and_update({"business_id": business_id, "date": date_key()},
-                                                {"$inc": {"count": n}}, upsert=True,
-                                                return_document=ReturnDocument.AFTER)
+async def allowance(db, business_id: str, kind: str = SCAN) -> tuple[str, int]:
+    """(period, limit) of a shop's allowance of `kind`. Decision D4 is open: one daily limit for every shop."""
+    return date_key(), get_settings().ai_daily_limit
+
+
+async def use_quota(db, business_id: str, n: int = 1, kind: str = SCAN) -> str:
+    """Count n scans; the period they were counted in (to give them back), or 429 when the allowance is used up."""
+    period, limit = await allowance(db, business_id, kind)
+    key = {"business_id": business_id, "period": period, "kind": kind}
+    try:
+        doc = await db.ai_usage.find_one_and_update(key, {"$inc": {"count": n}}, upsert=True,
+                                                    return_document=ReturnDocument.AFTER)
+    except DuplicateKeyError:  # another scan created the day's document at the same moment
+        doc = await db.ai_usage.find_one_and_update(key, {"$inc": {"count": n}},
+                                                    return_document=ReturnDocument.AFTER)
     if doc["count"] > limit:
+        await db.ai_usage.update_one(key, {"$inc": {"count": -n}})  # the count stays what was really used
         raise HTTPException(429, "The daily photo scan limit has been reached. Please search by name, or try again tomorrow.")
+    return period
 
 
-async def _run(db, business_id: str, n: int, call):
-    """Run an AI call; when Claude was never reached (unreadable photo, outage) the scans are given back."""
+async def _limit_user(user: dict):
+    await ratelimit.consume(f"ai:{user['id']}", os.environ.get("AI_USER_RATE") or "20/minute")
+
+
+async def _run(db, business_id: str, n: int, period: str, call):
+    """Run an AI call; when Claude was never reached (unreadable photo, outage, busy, paused) the scans are given back."""
     try:
         return await call()
     except (ai_client.BadImage, ai_client.AIUnavailable) as e:
-        await db.ai_usage.update_one({"business_id": business_id, "date": date_key()}, {"$inc": {"count": -n}})
-        raise HTTPException(400 if isinstance(e, ai_client.BadImage) else 503, str(e))
+        await db.ai_usage.update_one({"business_id": business_id, "period": period, "kind": SCAN},
+                                     {"$inc": {"count": -n}})
+        if isinstance(e, ai_client.BadImage):
+            raise HTTPException(400, str(e))
+        err = AppError(503, str(e), e.code)
+        if e.retry_after:
+            err.headers = {"Retry-After": str(int(e.retry_after))}
+        raise err
 
 
 @router.post("/identify-plant")
 async def identify(body: ImagePayload, user: dict = Depends(auth.require("sell", "stock"))):
     db = get_db()
     bid = user["business_id"]
-    await use_quota(db, bid)
-    products = await db.products.find({"business_id": bid, "deleted_at": None}, {"_id": 0}).to_list(5000)
+    await _limit_user(user)
+    period = await use_quota(db, bid)
     cats = await db.categories.find({"business_id": bid}, {"_id": 0}).to_list(500)
-    result = await _run(db, bid, 1, lambda: ai_client.identify_plant(
-        ai_client.decode_b64(body.image_base64), [p["name"] for p in products], [c["name"] for c in cats]))
+    result = await _run(db, bid, 1, period, lambda: ai_client.identify_plant(
+        ai_client.decode_b64(body.image_base64), [c["name"] for c in cats]))
     kind = result.pop("kind")
     logger.info("identify: kind=%s reason=%s", kind, result.pop("reason"))
     if kind == "bill":
@@ -71,10 +104,16 @@ async def identify(body: ImagePayload, user: dict = Depends(auth.require("sell",
     if kind == "unknown" or not result["plant_name"]:
         raise AppError(422, "This item could not be identified. Please retake the photo in good light, "
                             "or search by name.", "not_identified")
-    names = [result["matched_catalog_name"], result["plant_name"], result["scientific_name"], *result["alternatives"]]
-    matched, similar = best_product(products, names)
-    result["matched_product"] = (await views(db, user, [matched]))[0] if matched else None
-    result["similar_products"] = await views(db, user, similar) if not matched else []
+    names = [result["plant_name"], result["scientific_name"], *result["alternatives"]]
+    candidates = await db.products.find({"business_id": bid, "deleted_at": None}, NAME_FIELDS).to_list(5000)
+    matched, similar = best_product(candidates, names)
+    wanted = [p["id"] for p in ([matched] if matched else similar)]
+    full = {p["id"]: p for p in await db.products.find({"business_id": bid, "id": {"$in": wanted}},
+                                                         {"_id": 0}).to_list(None)}
+    shown = [full[i] for i in wanted if i in full]
+    result["matched_product"] = (await views(db, user, shown))[0] if matched and shown else None
+    result["similar_products"] = await views(db, user, shown) if not matched else []
+    result["matched_catalog_name"] = result["matched_product"]["name"] if result["matched_product"] else ""
     cat = next((c for c in cats if c["name"] == result.get("suggested_category")), None)
     result["suggested_category_id"] = cat["id"] if cat else None
     result["kind"] = kind  # "plant" (always sold in pieces) or "nursery_product"
@@ -131,23 +170,27 @@ async def scan_invoice(body: InvoicePayload, user: dict = Depends(auth.require("
         if not await db.uploads.find_one({"path": path, "business_id": bid}):
             raise HTTPException(400, "A page photo could not be found. Please add it again.")
     pages = max(1, len(body.image_paths))
-    await use_quota(db, bid, pages)
+    await _limit_user(user)
+    period = await use_quota(db, bid, pages)
     shop = await db.businesses.find_one({"id": bid}, {"_id": 0, "name": 1}) or {}
 
     async def read():
         if body.image_base64:
-            images = [ai_client.decode_b64(body.image_base64)]
-        else:
-            images = [(await run_in_threadpool(storage_client.get_object, path))[0] for path in body.image_paths]
-        return await ai_client.scan_invoice(images, shop.get("name", ""))
+            return await ai_client.scan_invoice([ai_client.decode_b64(body.image_base64)], shop.get("name", ""))
+        images = [(await run_in_threadpool(storage_client.get_object, path))[0] for path in body.image_paths]
+        return await ai_client.scan_invoice(images, shop.get("name", ""), normalised=True)
 
-    result = await _run(db, bid, pages, read)
+    try:
+        result = await _run(db, bid, pages, period, read)
+    except ai_client.Truncated:
+        raise AppError(422, "This bill is too long to read in one go. Please scan fewer pages at a time, "
+                            "or enter the items manually.", "bill_too_long")
     logger.info("scan-invoice: pages=%s is_bill=%s reason=%s", pages, result["is_bill"], result["reason"])
     if refusal := check_bill_pages(result, pages):
         raise refusal
     for k in ("is_bill", "reason", "pages", "same_supplier", "same_bill"):
         result.pop(k)
-    products = await db.products.find({"business_id": bid, "deleted_at": None}, {"_id": 0}).to_list(5000)
+    products = await db.products.find({"business_id": bid, "deleted_at": None}, NAME_FIELDS).to_list(5000)
     for it in result["items"]:
         match, _ = best_product(products, [it["name"]])
         it["product_id"] = match["id"] if match else None
