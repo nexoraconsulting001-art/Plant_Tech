@@ -189,6 +189,7 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
         "id": new_id(), "business_id": bid, "invoice_number": await _next_number(db, bid), "items": lines,
         **totals, "payment_method": body.payment_method, "status": "Paid", "gst_removed": gst_removed,
         "customer_id": customer_id, "customer_name": customer_name, "customer_phone": phone or "",
+        "customer_address": customer.get("address", ""),  # as it was on the day: editing the customer later leaves bills as they were
         "created_by": {"id": user["id"], "name": user.get("name", "")},
         "public_token": secrets.token_urlsafe(16), "date_key": date_key(), "created_at": now_iso(),
     }
@@ -280,7 +281,10 @@ async def _get_invoice(user: dict, invoice_id: str) -> dict:
 
 @router.get("/invoices/{invoice_id}")
 async def get_invoice(invoice_id: str, user: dict = Depends(auth.require("sell"))):
-    return _shown(await _get_invoice(user, invoice_id))
+    """`shop` is the shop's name, address and phone today, for the top of the in-app bill (like the printed one)."""
+    inv = await _get_invoice(user, invoice_id)
+    biz = await get_db().businesses.find_one({"id": user["business_id"]}, {"_id": 0, "name": 1, "address": 1, "phone": 1}) or {}
+    return {**_shown(inv), "shop": {k: biz.get(k) or "" for k in ("name", "address", "phone")}}
 
 
 @router.get("/invoices/{invoice_id}/share")

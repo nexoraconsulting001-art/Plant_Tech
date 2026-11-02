@@ -37,6 +37,8 @@ export type Invoice = {
   subtotal: number; discount: number; grand_total: number;
   gst_breakup: { rate: number; taxable: number; tax: number }[]; gst_total: number;
   payment_method: "Cash" | "UPI" | "Card"; customer_id: string | null; customer_name: string; customer_phone: string;
+  customer_address?: string; // as it was when billed; none on bills made before addresses were kept
+  shop?: { name: string; address: string; phone: string }; // the shop today (single bill only)
   created_by: { id: string; name: string }; created_at: string;
 };
 

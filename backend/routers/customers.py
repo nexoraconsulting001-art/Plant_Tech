@@ -19,6 +19,15 @@ class CustomerIn(BaseModel):
     notes: str = Field("", max_length=500)
 
 
+class CustomerPatch(BaseModel):
+    """Only the fields sent are changed. Past bills keep the name, phone and address they were made with."""
+    name: str | None = Field(None, max_length=80)
+    phone: str | None = Field(None, max_length=20)
+    email: str | None = Field(None, max_length=120)
+    address: str | None = Field(None, max_length=300)
+    notes: str | None = Field(None, max_length=500)
+
+
 @router.get("")
 async def list_customers(search: str = "", user: dict = Depends(auth.require("customers"))):
     q: dict = {"business_id": user["business_id"]}
@@ -68,6 +77,30 @@ async def create_customer(body: CustomerIn, user: dict = Depends(auth.require("s
     await db.customers.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+@router.patch("/{customer_id}")
+async def update_customer(customer_id: str, body: CustomerPatch, user: dict = Depends(auth.require("customers"))):
+    """Edit a customer (opened from the customer's page, which also needs "customers"). Staff who may only sell
+    can add a new customer while billing, but not change an existing one's number, where its bills go on WhatsApp."""
+    db = get_db()
+    bid = user["business_id"]
+    c = await db.customers.find_one({"id": customer_id, "business_id": bid}, {"_id": 0})
+    if not c:
+        raise HTTPException(404, "Customer not found.")
+    fields = {k: v.strip() for k, v in body.model_dump(exclude_none=True).items()}
+    if "name" in fields and not fields["name"]:
+        raise HTTPException(400, "Please enter the customer's name.")
+    if "phone" in fields:
+        phone = normalize_in_phone(fields["phone"])
+        if not phone:
+            raise HTTPException(400, "Please enter a valid 10-digit mobile number.")
+        if await db.customers.find_one({"business_id": bid, "phone": phone, "id": {"$ne": customer_id}}, {"_id": 1}):
+            raise HTTPException(409, "A customer with this phone number already exists.")
+        fields["phone"] = phone
+    if fields:
+        await db.customers.update_one({"id": customer_id, "business_id": bid}, {"$set": {**fields, "updated_at": now_iso()}})
+    return {**c, **fields}
 
 
 @router.get("/{customer_id}")

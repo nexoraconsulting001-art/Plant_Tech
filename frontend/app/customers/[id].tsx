@@ -1,28 +1,54 @@
-// A customer: call or WhatsApp them, what they've bought.
+// A customer: start an order for them, call or WhatsApp them, their address, what they've bought. Edit in the header.
+import { useState } from "react";
 import { Linking, Pressable, ScrollView, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { apiGet } from "@/src/api";
-import { Button, ErrorView, Header, LoadingView, Screen, T } from "@/src/components/ui";
+import { useAuth } from "@/src/auth";
+import { Button, ErrorView, Header, Icon, LoadingView, Screen, T } from "@/src/components/ui";
 import { formatCurrency, formatDate, formatPhone, formatQty } from "@/src/format";
-import { colors, radius, spacing } from "@/src/theme";
-import type { Customer } from "@/src/types";
+import { useStartOrder } from "@/src/hooks/useStartOrder";
+import { colors, radius, spacing, touch } from "@/src/theme";
+import type { Customer, Invoice } from "@/src/types";
 
-type PastBill = { id: string; invoice_number: string; grand_total: number; created_at: string; items: { name: string; quantity: number }[] };
+type PastBill = {
+  id: string; invoice_number: string; grand_total: number; created_at: string; payment_method?: Invoice["payment_method"];
+  items: { name: string; quantity: number }[];
+};
 
 export default function CustomerDetail() {
   const { t } = useTranslation();
   const router = useRouter();
+  const { can } = useAuth();
+  const startOrder = useStartOrder();
+  const [starting, setStarting] = useState(false);
   const { id } = useLocalSearchParams<{ id: string }>();
   const q = useQuery<Customer & { invoices: PastBill[] }>({ queryKey: ["customer", id], queryFn: () => apiGet(`/customers/${id}`) });
   const c = q.data;
   const digits = c?.phone.replace(/\D/g, "") ?? "";
+  const edit = (focus?: "address") => router.push({ pathname: "/customers/edit", params: focus ? { id, focus } : { id } });
+
+  async function newOrder() {
+    if (!c || starting) return;
+    setStarting(true);
+    try {
+      await startOrder({ id: c.id, name: c.name, phone: c.phone, purchase_count: c.purchase_count });
+    } finally {
+      setStarting(false);
+    }
+  }
 
   return (
     <Screen bg={colors.surface}>
-      <Header title={t("Customer")} />
+      <Header title={t("Customer")} right={c ? (
+        <Pressable onPress={() => edit()} testID="customer-edit"
+          style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: touch.min, paddingHorizontal: spacing.lg }}>
+          <Icon name="pencil-outline" size={22} color={colors.green} />
+          <T v="bold" color={colors.green}>{t("Edit")}</T>
+        </Pressable>
+      ) : undefined} />
       {!c ? (q.isError ? <ErrorView message={(q.error as Error).message} onRetry={q.refetch} /> : <LoadingView />) : (
         <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
           <View style={{ alignItems: "center", gap: spacing.xs }}>
@@ -32,6 +58,9 @@ export default function CustomerDetail() {
             <T v="title">{c.name}</T>
             {!!c.phone && <T v="body" color={colors.inkSoft}>{formatPhone(c.phone)}</T>}
           </View>
+          {can("sell") && (
+            <Button title={t("New order")} icon="cart-plus" onPress={newOrder} loading={starting} testID="customer-new-order" />
+          )}
           {!!c.phone && (
             <View style={{ flexDirection: "row", gap: spacing.md }}>
               <Button title={t("Call")} icon="phone" variant="outline" size="md" style={{ flex: 1 }} onPress={() => Linking.openURL(`tel:${c.phone}`)} />
@@ -49,7 +78,19 @@ export default function CustomerDetail() {
               <T v="title">{c.purchase_count}</T>
             </View>
           </View>
-          {!!c.address && <T v="body" color={colors.inkSoft}>{c.address}</T>}
+          {c.address ? (
+            <View style={{ flexDirection: "row", gap: spacing.md, padding: spacing.lg, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line }}
+              testID="customer-address">
+              <Icon name="map-marker-outline" size={24} color={colors.green} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <T v="label">{t("Address")}</T>
+                <T v="body">{c.address}</T>
+              </View>
+            </View>
+          ) : (
+            <Button title={t("Add address")} icon="map-marker-plus-outline" variant="dashed" size="md" onPress={() => edit("address")}
+              testID="customer-add-address" />
+          )}
           {!!c.notes && <T v="small">{c.notes}</T>}
 
           <View style={{ gap: spacing.sm }}>
@@ -64,7 +105,12 @@ export default function CustomerDetail() {
                     {b.items.map((i) => (i.quantity > 1 ? `${i.name} × ${formatQty(i.quantity)}` : i.name)).join(", ")}
                   </T>
                 </View>
-                <T v="number">{formatCurrency(b.grand_total)}</T>
+                <View style={{ alignItems: "flex-end" }}>
+                  <T v="number">{formatCurrency(b.grand_total)}</T>
+                  <T v="caption" testID={`customer-bill-${b.invoice_number}`}>
+                    {[b.invoice_number, b.payment_method ? t(b.payment_method) : ""].filter(Boolean).join(" · ")}
+                  </T>
+                </View>
               </Pressable>
             )) : <T v="small">{t("No bills yet")}</T>}
           </View>

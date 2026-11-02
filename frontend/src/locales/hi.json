@@ -670,5 +670,11 @@
   "Only {{n}} {{name}} in stock. Stock will go to {{after}}.": "स्टॉक में सिर्फ़ {{n}} {{name}} हैं। स्टॉक {{after}} हो जाएगा।",
   "{{name}} is out of stock. Stock will go to {{after}}.": "{{name}} का स्टॉक ख़त्म है। स्टॉक {{after}} हो जाएगा।",
   "Only {{n}} {{name}} in stock. Ask the owner to update the stock.": "स्टॉक में सिर्फ़ {{n}} {{name}} हैं। मालिक से स्टॉक अपडेट करवाएँ।",
-  "{{name}} is out of stock. Ask the owner to update the stock.": "{{name}} का स्टॉक ख़त्म है। मालिक से स्टॉक अपडेट करवाएँ।"
+  "{{name}} is out of stock. Ask the owner to update the stock.": "{{name}} का स्टॉक ख़त्म है। मालिक से स्टॉक अपडेट करवाएँ।",
+  "Edit customer": "ग्राहक की जानकारी बदलें",
+  "Save changes": "बदलाव सेव करें",
+  "Bills already made keep the details they were made with.": "पहले बने बिलों में पुरानी जानकारी ही रहेगी।",
+  "Add address": "पता जोड़ें",
+  "Save and start order": "सेव करें और ऑर्डर शुरू करें",
+  "Bill to": "बिल पाने वाला"
 }

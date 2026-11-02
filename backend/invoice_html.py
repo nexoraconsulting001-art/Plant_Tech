@@ -92,6 +92,7 @@ def render(inv: dict, biz: dict, *, public: bool = True, logo_src: str | None = 
     gstin = f'<div class="s">GSTIN {e(biz.get("gstin"))}</div>' if biz.get("gst_registered") and biz.get("gstin") else ""
     customer = e(inv.get("customer_name") or "Walk-in customer")
     phone = f'<div class="m">{e(inv["customer_phone"])}</div>' if inv.get("customer_phone") else ""
+    address = f'<div class="m addr">{e(inv["customer_address"])}</div>' if inv.get("customer_address") else ""
     footer = e(biz.get("footer_note") or "Thank you, visit again!")
     button = ('<button class="dl" onclick="window.print()">Download / Print PDF</button>' if public else "")
     logo = f'<img class="logo" src="{e(logo_src)}" alt="">' if logo_src else ""
@@ -113,6 +114,8 @@ body {{ margin: 0; background: #EEF3EF; font-family: "Mukta", "Noto Sans", syste
 .meta {{ display: flex; justify-content: space-between; gap: 10px; padding: 12px 18px; border-bottom: 1px dashed #C7D6CC; font-size: 14px; }}
 .m {{ color: #4B5F55; }}
 .meta b {{ font-size: 16px; }}
+.who {{ flex: 1; min-width: 0; }}
+.addr {{ white-space: pre-line; overflow-wrap: anywhere; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 15px; }}
 th {{ text-align: left; font-size: 12px; text-transform: uppercase; color: #4B5F55; padding: 8px 18px 4px; }}
 td {{ padding: 8px 18px; }}
@@ -132,7 +135,7 @@ tr.z td {{ background: #F5F8F5; }}
 </style></head>
 <body><div class="wrap"><article class="card">
 <header class="head">{logo}<div><h1>{e(biz.get("name") or "Bill")}</h1><div class="s">{shop_line}</div>{gstin}</div></header>
-<div class="meta"><div><div class="m">Bill to</div><b>{customer}</b>{phone}</div>
+<div class="meta"><div class="who"><div class="m">Bill to</div><b>{customer}</b>{phone}{address}</div>
 <div style="text-align:right"><div class="m">Bill no.</div><b>{e(inv.get("invoice_number"))}</b><div class="m">{_when(inv.get("created_at", ""))}</div></div></div>
 <table><thead><tr><th>Item</th><th class="c">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
 <tbody>{"".join(rows)}</tbody></table>

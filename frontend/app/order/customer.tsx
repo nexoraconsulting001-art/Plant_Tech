@@ -1,6 +1,6 @@
 // New order, step 1: who is buying? Every order has a customer (name + phone), so bills can be sent on
 // WhatsApp and each customer's history is complete. Search, or add a new one. Picking a customer opens
-// their saved order if they have one (items added earlier, by anyone in the shop).
+// their saved order if they have one (items added earlier, by anyone in the shop): see useStartOrder.
 // With ?change=1 (the "Change" on an order): the items move to the customer picked.
 import { useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, View } from "react-native";
@@ -13,6 +13,7 @@ import { apiGet, apiPost } from "@/src/api";
 import { OrderCustomer, useCart } from "@/src/cart-context";
 import { useToast } from "@/src/components/toast";
 import { Button, Field, Header, Icon, PhoneField, Screen, SearchBox, T } from "@/src/components/ui";
+import { useStartOrder } from "@/src/hooks/useStartOrder";
 import { formatPhone, normalizePhone, plural } from "@/src/format";
 import { colors, radius, spacing } from "@/src/theme";
 
@@ -21,12 +22,14 @@ export default function OrderCustomerStep() {
   const router = useRouter();
   const toast = useToast();
   const cart = useCart();
+  const startOrder = useStartOrder();
   const { change } = useLocalSearchParams<{ change?: string }>();
   const [typed, setTyped] = useState("");
   const [q, setQ] = useState("");
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
 
@@ -49,12 +52,7 @@ export default function OrderCustomerStep() {
         router.back();
         return;
       }
-      const saved = await cart.openFor(c);
-      router.replace("/order/scan");
-      if (saved) {
-        toast.show(t("{{name}}'s saved order: {{items}}", { name: c.name, items: plural(saved, "1 item", "{{n}} items") }), "success");
-        router.push("/order/cart");
-      }
+      await startOrder(c, true);
     } finally {
       setOpening(null);
     }
@@ -64,6 +62,7 @@ export default function OrderCustomerStep() {
     const digits = normalizePhone(typed);
     setPhone(digits ?? (/^\d+$/.test(typed.trim()) ? typed.trim().slice(-10) : ""));
     setName(digits || /^\d+$/.test(typed.trim()) ? "" : typed.trim());
+    setAddress("");
     setAdding(true);
   }
 
@@ -71,7 +70,7 @@ export default function OrderCustomerStep() {
   async function save() {
     setBusy(true);
     try {
-      const c = await apiPost("/customers", { name: name.trim(), phone: `+91${phone10}` });
+      const c = await apiPost("/customers", { name: name.trim(), phone: `+91${phone10}`, address });
       await choose({ id: c.id, name: c.name, phone: c.phone, purchase_count: 0 });
     } catch (e: any) {
       toast.show(e.message, "error");
@@ -103,6 +102,7 @@ export default function OrderCustomerStep() {
           <Field label={t("Name")} value={name} onChangeText={setName} autoCapitalize="words" autoFocus={!name} testID="customer-new-name" />
           <PhoneField label={t("Phone number (WhatsApp)")} value={phone} onChangeText={setPhone} testID="customer-new-phone"
             error={phone.length === 10 && !phone10 ? t("Enter a 10-digit mobile number") : undefined} />
+          <Field label={t("Address (optional)")} value={address} onChangeText={setAddress} multiline testID="customer-new-address" />
           <Button title={t("Save and continue")} icon="arrow-right" onPress={save} loading={busy} disabled={!name.trim() || !phone10} testID="customer-new-save" />
           <Button title={t("Back to search")} variant="outline" size="md" onPress={() => setAdding(false)} />
         </KeyboardAwareScrollView>

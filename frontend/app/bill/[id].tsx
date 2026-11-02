@@ -65,6 +65,7 @@ export default function Bill() {
     );
   }
 
+  const shopLine = [inv.shop?.address, inv.shop?.phone ? formatPhone(inv.shop.phone) : ""].filter(Boolean).join(" · ");
   const who = inv.customer_phone
     ? t("To {{name}} · {{phone}}", { name: inv.customer_name.split(" ")[0], phone: formatPhone(inv.customer_phone) })
     : t("Choose the customer in WhatsApp");
@@ -99,10 +100,21 @@ export default function Bill() {
         </View>
 
         <View style={{ gap: spacing.sm, padding: spacing.lg, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, marginTop: spacing.xs }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+          {!!inv.shop?.name && (
+            <>
+              <View testID="bill-shop">
+                <T v="bold">{inv.shop.name}</T>
+                {!!shopLine && <T v="small">{shopLine}</T>}
+              </View>
+              <View style={{ height: 1, backgroundColor: colors.line, marginVertical: spacing.xs }} />
+            </>
+          )}
+          <View style={{ flexDirection: "row", justifyContent: "space-between", gap: spacing.md }}>
             <View style={{ flex: 1 }}>
+              {!!inv.shop?.name && <T v="caption">{t("Bill to")}</T>}
               <T v="bold">{inv.customer_name}</T>
               {!!inv.customer_phone && <T v="small">{formatPhone(inv.customer_phone)}</T>}
+              {!!inv.customer_address && <T v="small" testID="bill-customer-address">{inv.customer_address}</T>}
             </View>
             <View style={{ alignItems: "flex-end" }}>
               <T v="bold">{inv.invoice_number}</T>
