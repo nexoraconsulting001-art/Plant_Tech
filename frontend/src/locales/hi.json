@@ -761,5 +761,6 @@
   "Give back {{amount}}": "{{amount}} वापस दें",
   "Collect {{amount}} more": "{{amount}} और लें",
   "Nothing to give back or collect": "न कुछ वापस देना, न लेना",
-  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।"
+  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।",
+  "This request was already used for another bill.": "यह अनुरोध पहले ही किसी दूसरे बिल के लिए इस्तेमाल हो चुका है।"
 }
