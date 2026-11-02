@@ -39,7 +39,11 @@ def test_first_shop_photo_becomes_shared_picture(client):
 def test_new_product_starts_a_library_entry(client):
     a = Shop(client, phone="9811122334")
     b = Shop(client, phone="9811155667")
-    a.product("Ceramic Pot 10 inch", 150, 4, category="Pots")
+    p = a.product("Ceramic Pot 10 inch", 150, 4, category="Pots")
+    # Private to shop A until an app admin approves it; then every shop finds it.
+    assert b.get("/api/products/suggest", params={"q": "ceramic"}).json()["library"] == []
+    admin = Shop(client, phone="9000000001", name="Admin")
+    assert admin.post(f"/api/admin/library/{p['library_id']}/publish").status_code == 200
     assert b.get("/api/products/suggest", params={"q": "ceramic"}).json()["library"][0]["name"] == "Ceramic Pot 10 inch"
 
 

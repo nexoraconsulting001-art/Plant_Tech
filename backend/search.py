@@ -77,10 +77,13 @@ EXACT, STARTS, CONTAINS = 3, 2, 1
 
 def match_level(query: str, term: str) -> int:
     """EXACT = the same name, STARTS = a word starts with what was typed, CONTAINS = contains it, 0 = no match."""
-    qk, tk = name_key(query), name_key(term)
+    return level_of(name_key(query), phonetic(query), name_key(term), phonetic(term))
+
+
+def level_of(qk: str, qp: str, tk: str, tp: str) -> int:
+    """match_level on forms already worked out: (name key, sound-alike) of the query and of the term."""
     if not qk or not tk:
         return 0
-    qp, tp = phonetic(query), phonetic(term)
     best = 0
     for q, t, ok in ((qk, tk, True), (qp, tp, len(qp) >= 2 and bool(tp))):
         if not ok:
@@ -97,9 +100,19 @@ def match_level(query: str, term: str) -> int:
 def search_score(query: str, terms: list[str]) -> int:
     """How well terms match: 0 = no match. A match on the first term (the item's own name) beats the same
     kind of match on another name, so "money" lists Money Plant before Jade Plant ("money tree")."""
+    return score_of(name_key(query), phonetic(query), term_forms(terms))
+
+
+def term_forms(terms: list[str]) -> list[tuple[str, str]]:
+    """(name key, sound-alike) of each term, worked out once (the cached library keeps these)."""
+    return [(name_key(t), phonetic(t)) if t else ("", "") for t in terms]
+
+
+def score_of(qk: str, qp: str, forms: list[tuple[str, str]]) -> int:
+    """search_score on forms already worked out."""
     best = 0
-    for i, term in enumerate(terms):
-        if term and (level := match_level(query, term)):
+    for i, (tk, tp) in enumerate(forms):
+        if level := level_of(qk, qp, tk, tp):
             best = max(best, level * 2 + (1 if i == 0 else 0))
     return best
 
@@ -113,6 +126,76 @@ def library_terms(entry: dict | None) -> list[str]:
 def product_terms(product: dict, entry: dict | None = None) -> list[str]:
     """A product is found by its own name, botanical name and code, and by its shared entry's other names."""
     return [product["name"], product.get("botanical_name", ""), product.get("sku", ""), *library_terms(entry)]
+
+
+# ---- search keys: typed search through a database index ----------------------------------------------
+# Products and library entries store `search_keys`, worked out when they are written, and a query looks up the
+# keys that start with what was typed (an anchored prefix, so the index is used). Each name gives:
+#   the whole name, ending in END ("k:money plant|"; equal to it = the same name), and
+#   every tail that starts at a word ("k:plant"), so "plant" finds Money Plant as it always did,
+# each as the name key and as the sound-alike form ("p:moneiplnt|", "p:plnt"). Tags tell an item's own name
+# (k, p) from its other names (s, t: botanical name, code, Hindi name, aliases), so own-name matches are
+# fetched first. The candidates are then ranked with search_score as before. A match inside a word
+# ("rose" in "Primrose") is no longer found; it was the weakest kind of match.
+
+END = "|"
+OWN, OTHER = ("k:", "p:"), ("s:", "t:")  # (name key, sound-alike) tags
+
+
+def term_keys(term: str, own: bool) -> set[str]:
+    k = name_key(term)
+    if not k:
+        return set()
+    kt, pt = OWN if own else OTHER
+    keys = {kt + k + END}
+    if p := phonetic(k):
+        keys.add(pt + p + END)
+    words = k.split()
+    for i in range(1, len(words)):
+        tail = " ".join(words[i:])
+        keys.add(kt + tail)
+        if p := phonetic(tail):
+            keys.add(pt + p)
+    return keys
+
+
+def keys_of(terms: list[str], first_is_own: bool = True) -> list[str]:
+    """Search keys of an item's names; the first one is its own name (unless first_is_own is False)."""
+    keys: set[str] = set()
+    for i, t in enumerate(terms):
+        if t:
+            keys |= term_keys(t, first_is_own and i == 0)
+    return sorted(keys)
+
+
+def library_keys(entry: dict) -> list[str]:
+    """The keys a library entry is found by in the library (its English name is its own name)."""
+    return keys_of([entry.get("name", ""), entry.get("name_hi", ""), entry.get("botanical", ""),
+                    *entry.get("aliases", [])])
+
+
+def product_keys(product: dict, entry: dict | None) -> tuple[list[str], list[str]]:
+    """(own_keys, search_keys) of a product: its own names, plus its shared entry's names (as other names)."""
+    own = keys_of([product["name"], product.get("botanical_name", ""), product.get("sku", "")])
+    return own, sorted(set(own) | set(keys_of(library_terms(entry), first_is_own=False)))
+
+
+def query_forms(query: str) -> tuple[str, str]:
+    return name_key(query), phonetic(query)
+
+
+def exact_keys(qk: str, qp: str) -> list[str]:
+    """Keys of names that are exactly what was typed (EXACT in match_level)."""
+    keys = [OWN[0] + qk + END, OTHER[0] + qk + END]
+    if len(qp) >= 2:
+        keys += [OWN[1] + qp + END, OTHER[1] + qp + END]
+    return keys
+
+
+def prefixes(qk: str, qp: str, own: bool) -> list[str]:
+    """Key prefixes of names that start with what was typed (or have a word that does)."""
+    kt, pt = OWN if own else OTHER
+    return [kt + qk] + ([pt + qp] if len(qp) >= 2 else [])
 
 
 # ---- AI and supplier-bill names ------------------------------------------------------------------
