@@ -1,28 +1,131 @@
-# NurseryPOS on the shared Oracle VM (see DEPLOYMENT-GUIDE.md). Port 8120, localhost only:
+# NurseryPOS (Hara Hisaab) on the shared Oracle VM (see DEPLOYMENT-GUIDE.md). Port 8120, localhost only:
 # the VM's shared Caddy is the way in (add-site.sh nurserypos proxy 8120).
 # PROJECT_NAME / HOST_PORT come from deploy/.env (staging: nurserypos-staging / 8130).
+#
+# Services (one image for web, worker and migrate):
+#   mongo    MongoDB 7 as a single-node replica set "rs0" (transactions need one). The health check starts the
+#            replica set the first time; existing data stays as it is. Production uses Atlas instead: set
+#            MONGO_URL in deploy/.env to the Atlas mongodb+srv:// URL (it overrides the one below) and drop mongo.
+#   migrate  `python -m migrations up`, once per deploy, before web and worker start (start-up itself only reads).
+#   web      gunicorn + Uvicorn workers (backend/gunicorn.conf.py), WEB_CONCURRENCY workers (2 on the shared VM).
+#   worker   arq: queued jobs and the scheduled ones (daily summary). Exactly one.
+#   redis    job queue and shared rate limits. Append-only file on, never evicts keys, no published port.
+# ENV defaults to staging here; production's deploy/.env sets ENV=production (and the checks that come with it).
 name: ${PROJECT_NAME:-nurserypos}
-services:
-  web:
-    build: { context: ../backend }
-    restart: unless-stopped
-    env_file: .env                       # secrets, on the VM only
-    environment:
-      PORT: "8120"
-      MONGO_URL: mongodb://mongo:27017
-      LOCAL_STORAGE_DIR: /data/uploads
-    ports: ["127.0.0.1:${HOST_PORT:-8120}:8120"]
-    volumes: ["data:/data"]
-    depends_on: [mongo]
 
+x-api: &api
+  build:
+    context: ../backend
+    args: { GIT_SHA: "${GIT_SHA:-}" }
+  image: ${PROJECT_NAME:-nurserypos}-api:latest
+  env_file: .env                         # secrets, on the VM only
+  environment: &api-env
+    ENV: ${ENV:-staging}
+    MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017/?replicaSet=rs0}
+    REDIS_URL: redis://redis:6379/0
+    LOCAL_STORAGE_DIR: /data/uploads
+  volumes: ["data:/data"]
+  init: true
+  restart: unless-stopped
+  logging: &logging
+    driver: local
+    options: { max-size: "20m", max-file: "5" }
+
+services:
   mongo:
-    image: mongo:7                       # multi-arch, runs on Arm64
+    image: mongo:7.0                     # multi-arch, runs on Arm64
     restart: unless-stopped
-    # small cache: the VM's 6 GB is shared with other sites
-    command: ["--wiredTigerCacheSizeGB", "0.25"]
+    # small cache and oplog: the VM's 6 GB and its disk are shared with other sites
+    command: ["--replSet", "rs0", "--bind_ip_all", "--wiredTigerCacheSizeGB", "0.25", "--oplogSize", "1024"]
     volumes: ["mongo:/data/db"]
-    # no ports: only the web container can reach it
+    # no ports: only this project's containers can reach it
+    healthcheck:
+      # first run: start the replica set with this one member; afterwards: just check it has a primary
+      test: ["CMD", "mongosh", "--quiet", "--eval",
+             "try { rs.status().ok } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo:27017'}]}).ok }; db.hello().isWritablePrimary || quit(1)"]
+      interval: 10s
+      timeout: 10s
+      start_period: 30s
+      retries: 10
+    init: true
+    stop_grace_period: 30s
+    pids_limit: 512
+    deploy: { resources: { limits: { memory: 1g } } }
+    logging: *logging
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes: ["redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    init: true
+    stop_grace_period: 30s
+    pids_limit: 128
+    deploy: { resources: { limits: { cpus: "0.5", memory: 192m } } }
+    logging: *logging
+
+  # A volume made by the old image (which ran as root) belongs to root; the image now runs as uid 10001.
+  data-owner:
+    <<: *api
+    restart: "no"
+    user: root
+    command: ["sh", "-c", "find /data -not -user 10001 -exec chown 10001:10001 {} +"]
+    healthcheck: { disable: true }
+
+  migrate:
+    <<: *api
+    restart: "no"
+    command: ["python", "-m", "migrations", "up"]
+    healthcheck: { disable: true }
+    depends_on:
+      mongo: { condition: service_healthy }
+      data-owner: { condition: service_completed_successfully }
+    deploy: { resources: { limits: { cpus: "1", memory: 512m } } }
+
+  web:
+    <<: *api
+    environment:
+      <<: *api-env
+      PORT: "8120"
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    ports: ["127.0.0.1:${HOST_PORT:-8120}:8120"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8120/livez', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 30s
+    pids_limit: 512
+    deploy: { resources: { limits: { cpus: "2", memory: 1g } } }
+
+  worker:
+    <<: *api
+    command: ["arq", "worker.WorkerSettings"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "arq", "--check", "worker.WorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    stop_grace_period: 30s
+    pids_limit: 256
+    deploy: { replicas: 1, resources: { limits: { cpus: "1", memory: 512m } } }
 
 volumes:
   data: {}
   mongo: {}
+  redis: {}
