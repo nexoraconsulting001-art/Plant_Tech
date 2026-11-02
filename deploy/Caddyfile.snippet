@@ -1,0 +1,96 @@
+# Caddy (v2.7 or newer) in front of the Hara Hisaab API. One snippet, imported by each site:
+#
+#   (paste this whole file once into the VM's Caddyfile, or `import /home/ubuntu/Plant_Tech/deploy/Caddyfile.snippet`)
+#   {$HH_API_HOST:nurserypos.140-238-251-141.sslip.io} {
+#   	import hara_hisaab 8120 prod
+#   }
+#   {$HH_STAGING_HOST:nurserypos-staging.140-238-251-141.sslip.io} {
+#   	import hara_hisaab 8130 staging
+#   }
+#
+# Host names come from the environment of the Caddy service (systemctl edit caddy -> Environment=HH_API_HOST=...),
+# so the domain (decision D1) needs no change here. args[0] = the API port on 127.0.0.1, args[1] = a name for
+# the access log file. Check before reloading: caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+#
+# What it does:
+# - zstd/gzip compression (a response the API already gzipped passes through as it is)
+# - request bodies: 12 MB on photo routes (AI scans, uploads, library photos), 256 KB everywhere else (413 above)
+# - security headers; the bill page /i/* gets a strict CSP and is never cached or indexed
+# - active health checks on /readyz, and requests held for up to 30 s while a deploy swaps the container
+#   (a request that could not reach the API at all is retried, so a deploy is not seen as errors)
+# - /metrics is not reachable from outside
+# - the access log never contains bill-link tokens or query strings (customer names, phone numbers typed in search)
+
+(hara_hisaab) {
+	encode zstd gzip
+
+	@photos path /api/ai/* /api/upload /api/upload-base64 /api/admin/library/*
+	@small not path /api/ai/* /api/upload /api/upload-base64 /api/admin/library/*
+	request_body @photos {
+		max_size 12MB
+	}
+	request_body @small {
+		max_size 256KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-Server
+	}
+	# The customer's bill page (the link holds the token): inline styles and the print button only, no referrer,
+	# never cached or indexed. Every other response: the usual referrer policy.
+	@bill path /i/*
+	@notbill not path /i/*
+	header @bill {
+		Content-Security-Policy "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		Referrer-Policy "no-referrer"
+		Cache-Control "private, no-store"
+		X-Robots-Tag "noindex, nofollow"
+	}
+	header @notbill Referrer-Policy "strict-origin-when-cross-origin"
+
+	respond /metrics 404
+
+	reverse_proxy 127.0.0.1:{args[0]} {
+		# active: take the API out while /readyz is not 200 (MongoDB or photo storage down, or it is restarting)
+		health_uri /readyz
+		health_interval 5s
+		health_timeout 3s
+		health_status 200
+		health_passes 2
+		health_fails 2
+		# passive: three failed connections in 10 s also mark it down
+		fail_duration 10s
+		max_fails 3
+		# no healthy API (a deploy swapping containers): hold the request and retry for up to 30 s
+		lb_try_duration 30s
+		lb_try_interval 250ms
+		header_up X-Real-IP {remote_host}
+	}
+
+	log {
+		output file /var/log/caddy/hara-hisaab-{args[1]}.log {
+			roll_size 100MiB
+			roll_keep 200
+			# 180 days (CERT-In, decision D9); rolled files are gzipped. At full scale ship them to the log service too.
+			roll_keep_for 4320h
+		}
+		format filter {
+			wrap json
+			# "/i/<token>?x" -> "/i/REDACTED";  "/api/customers/find?q=98111" -> "/api/customers/find?REDACTED"
+			request>uri regexp ^(?:(/i/)[^?]*(?:\?.*)?|([^?]*\?).*)$ ${1}${2}REDACTED
+			request>headers>Referer delete
+			request>remote_ip ip_mask {
+				ipv4 24
+				ipv6 48
+			}
+			request>client_ip ip_mask {
+				ipv4 24
+				ipv6 48
+			}
+		}
+	}
+}

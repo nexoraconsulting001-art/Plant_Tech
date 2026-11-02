@@ -3,10 +3,14 @@
 #   install -m 755 deploy/ci-deploy ~/bin/nurserypos-ci-deploy
 # and in ~/.ssh/authorized_keys:
 #   command="/home/ubuntu/bin/nurserypos-ci-deploy",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA... nurserypos-deploy
-# The key can only ask for "staging" or "prod"; it never gets a shell.
+# The key can only ask for "staging" or "prod" (deploy the branch's newest commit), or "staging rollback" /
+# "prod rollback" (the image that ran before); it never gets a shell. The workflow only ever sends the first two,
+# so an older installed copy of this file keeps working.
 set -euo pipefail
 case "${SSH_ORIGINAL_COMMAND:-}" in
-  staging) exec "$HOME/Plant_Tech-staging/deploy/deploy.sh" staging ;;
-  prod)    exec "$HOME/Plant_Tech/deploy/deploy.sh" prod ;;
-  *) echo "refused: this key can only run 'staging' or 'prod'" >&2; exit 1 ;;
+  staging)          exec "$HOME/Plant_Tech-staging/deploy/deploy.sh" staging ;;
+  prod)             exec "$HOME/Plant_Tech/deploy/deploy.sh" prod ;;
+  "staging rollback") exec "$HOME/Plant_Tech-staging/deploy/deploy.sh" staging rollback ;;
+  "prod rollback")    exec "$HOME/Plant_Tech/deploy/deploy.sh" prod rollback ;;
+  *) echo "refused: this key can only run 'staging', 'prod', 'staging rollback' or 'prod rollback'" >&2; exit 1 ;;
 esac

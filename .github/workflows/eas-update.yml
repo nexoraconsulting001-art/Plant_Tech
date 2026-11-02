@@ -1,0 +1,60 @@
+# Over-the-air app updates (EAS Update) are published from here only, never from a laptop, and only by hand
+# (Actions > App update > Run workflow) after the owner's browser go. The app checks run first, and the job waits
+# in the GitHub Environment of the channel (production: a required reviewer).
+# An update reaches only phones whose app version equals the one in frontend/app.json (runtimeVersion policy
+# appVersion), so a 1.2.x update never reaches the 1.1.0 QA build.
+# Needs the secret EXPO_TOKEN (expo.dev > Account settings > Access tokens, a robot user) in both environments.
+name: App update
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "EAS channel"
+        type: choice
+        options: [staging, production]
+        required: true
+      message:
+        description: "What changed (shown in the EAS dashboard)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eas-update-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ inputs.channel == 'production' && 'production' || 'staging' }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: "22"
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - run: yarn install --frozen-lockfile --non-interactive
+      - name: eas update
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
+          MESSAGE: ${{ inputs.message }}
+          EAS_ENVIRONMENT: ${{ inputs.channel == 'production' && 'production' || 'preview' }}
+          # An update is bundled here, not by the build: these must match the channel's profile in frontend/eas.json
+          # (variable APP_BACKEND_URL per GitHub Environment once the domain exists, decision D1).
+          EXPO_PUBLIC_BACKEND_URL: ${{ vars.APP_BACKEND_URL || (inputs.channel == 'production' && 'https://nurserypos.140-238-251-141.sslip.io' || 'https://nurserypos-staging.140-238-251-141.sslip.io') }}
+          APP_VARIANT: ${{ inputs.channel == 'staging' && 'staging' || '' }}
+        run: |
+          npx --yes eas-cli@25.0.0 update --channel "$CHANNEL" --environment "$EAS_ENVIRONMENT" --message "$MESSAGE" --non-interactive
