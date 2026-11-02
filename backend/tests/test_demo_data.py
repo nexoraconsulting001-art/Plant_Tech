@@ -1,10 +1,12 @@
 """Demo shop data: seeded once, refreshed daily by moving every date forward, demo rows removable."""
 from datetime import datetime, timedelta
 
+import pytest
+from conftest import Shop, run
+
 import db as db_module
 import demo_data
 from common import now_ist
-from conftest import Shop, run
 
 # This afternoon: the shop's own test bill below is made with the real clock, so the demo uses the same day.
 NOW = now_ist().replace(hour=15, minute=5, second=0, microsecond=0)
@@ -46,9 +48,12 @@ def test_seed_refresh_remove(client):
     # Missed days catch up in one go.
     assert run(demo_data.refresh(db, "9811122334", today=tomorrow + timedelta(days=3)))["shifted_days"] == 3
 
-    # A shop without demo data is never moved.
-    Shop(client, phone="9811155667", name="Real")
-    assert run(demo_data.refresh(db, "9811155667", today=tomorrow))["shifted_days"] == 0
+    # A shop not marked demo is never moved: refused.
+    real = Shop(client, phone="9811155667", name="Real")
+    with pytest.raises(demo_data.NotAllowed):
+        run(demo_data.refresh(db, "9811155667", today=tomorrow + timedelta(days=9)))
+    assert real.get("/api/business").json().get("demo") is None
+    assert shop.get("/api/business").json()["demo"] is True  # seeding marked the demo shop
 
     business_id = shop.get("/api/auth/me").json()["business"]["id"]
     run(demo_data.remove_demo(db, business_id))
