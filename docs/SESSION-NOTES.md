@@ -58,6 +58,20 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
 
 **Roadmap (2 Nov):** open issues first, then iOS live, then production and scale. See `docs/ROADMAP.md`; pricing tiers in `docs/TIERS-PLAN.md`.
 
+## Testers' round (2 Nov 2026, on `staging`, not pushed until the owner's browser go)
+Owner's answers: both addresses on the bill; WhatsApp on/off; several UPI IDs with a default, changeable before the QR;
+owners may sell below stock with a warning, employees may not; push notifications and the daily summary for the owner only;
+bills can be corrected for 7 days; decimals by product unit, never for plants.
+- 0da049e units per product (pcs/bag/packet/tray whole; kg/g/litre/ml/metre decimals) and a typeable quantity everywhere.
+- d7f3e21 selling below stock: owner warned (Found, cart, Pay) and the stock goes negative (`allow_short`, owner only on the server); employees blocked; Home "Sold below stock" card.
+- 3df3276 customer address (billing form, Edit customer, printed under "Bill to"), New order from a customer.
+- 4f8e071 "Send bill on WhatsApp" switch (on: WhatsApp opens after billing); `upi_ids` + `default_upi`, Change on the QR screen, UPI ID saved on the bill; old clients still get `upi_id`.
+- 562536b correct/cancel within 7 days, **owner only** (one constant in `sales.py`): cancel + new linked number, stock and totals restored, reports skip Cancelled. The Pay screen says what to give back or collect.
+- 386fd6d Home low-stock card, More → Notifications (owner), push via Expo (`PUSH_ENABLED`, off by default), daily summary loop (default 21:00 IST). Setup steps in `docs/PUSH-SETUP.md` (Firebase, owner does it).
+- 163318b review fixes; app is now 1.2.0 (versionCode 3).
+- Checked in the local browser on 2 Nov: 40 pcs typed, below-stock warnings and "Bill anyway", two UPI IDs and the QR picker, WhatsApp auto-open, Correct bill (INV-0424 → INV-0425), give-back amount, Notifications screen.
+- Not checked yet: a phone (push needs Firebase + a 1.2.0 build), the employee view in the browser, Hindi on the new screens.
+
 ## Open items for next session
 1. **Phone checks on the 1.1.0 QA APK** (the owner is installing it): QA sections O (crop: dragging, photos taken sideways come out upright, back button), I.11–I.13 (bottom buttons, sheets, keyboard), M.6–M.11 (bill pages taken one after another with the camera), S (suppliers) and T (Hindi; especially T.7, no clipped vowel marks at the largest font). Fix whatever the owner reports.
 2. **Do not move to production yet** (owner, 18 Oct). `main` stays on 19ca6f3 (the old single-shop version); no merge of `staging` into `main` until the owner says so.

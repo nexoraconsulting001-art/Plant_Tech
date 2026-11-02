@@ -95,6 +95,14 @@ export default function OrderPay() {
               cart.gstIncluded > 0.004 ? t("includes GST {{gst}}", { gst: formatCurrency(cart.gstIncluded) })
                 : cart.gstRemoved ? t("no GST on this bill") : ""].filter(Boolean).join(" · ")}
           </T>
+          {cart.correcting?.paid != null && (
+            <T v="small" color={colors.greenDark} testID="pay-difference" style={{ marginTop: spacing.sm, textAlign: "center", fontWeight: "700" }}>
+              {[t("Already paid {{amount}} on {{number}}", { amount: formatCurrency(cart.correcting.paid), number: cart.correcting.number }),
+                cart.correcting.paid - cart.total > 0.004 ? t("Give back {{amount}}", { amount: formatCurrency(cart.correcting.paid - cart.total) })
+                  : cart.total - cart.correcting.paid > 0.004 ? t("Collect {{amount}} more", { amount: formatCurrency(cart.total - cart.correcting.paid) })
+                    : t("Nothing to give back or collect")].join(" · ")}
+            </T>
+          )}
         </View>
 
         <View style={{ gap: spacing.sm }}>

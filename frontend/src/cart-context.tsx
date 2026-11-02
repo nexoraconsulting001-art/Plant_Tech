@@ -30,8 +30,9 @@ export type CartItem = {
 
 export type OrderCustomer = { id: string; name: string; phone: string; purchase_count?: number };
 
-// the bill being corrected; returning = how much of each product it took (given back when the correction is billed)
-export type Correction = { id: string; number: string; until: string; returning: Record<string, number> };
+// the bill being corrected; returning = how much of each product it took (given back when the correction is billed);
+// paid / paidBy = what the customer paid on it, so the pay screen can say what to give back or collect
+export type Correction = { id: string; number: string; until: string; returning: Record<string, number>; paid?: number; paidBy?: string };
 
 type Order = { uid: string | null; customer: OrderCustomer | null; items: CartItem[]; discount: number; gstRemoved: boolean;
   correcting: Correction | null };
@@ -203,7 +204,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     });
     put({ uid, customer: inv.customer_id ? { id: inv.customer_id, name: inv.customer_name, phone: inv.customer_phone } : null, items,
       discount: inv.discount, gstRemoved: !!inv.gst_removed,
-      correcting: { id: inv.id, number: inv.invoice_number, until: inv.correct_until ?? "", returning } });
+      correcting: { id: inv.id, number: inv.invoice_number, until: inv.correct_until ?? "", returning, paid: inv.grand_total,
+        paidBy: inv.payment_method } });
     return [...new Set(skipped)];
   }
 

@@ -756,5 +756,9 @@
   "They need the Hara Hisaab app on an Android phone, updated to the latest version.": "इसके लिए Android फ़ोन पर हरा हिसाब ऐप का नया वर्ज़न चाहिए।",
   "Send a test notification": "टेस्ट नोटिफ़िकेशन भेजें",
   "Allow notifications": "नोटिफ़िकेशन की अनुमति दें",
-  "Shop alerts": "दुकान के अलर्ट"
+  "Shop alerts": "दुकान के अलर्ट",
+  "Already paid {{amount}} on {{number}}": "{{number}} पर {{amount}} पहले ही दिए",
+  "Give back {{amount}}": "{{amount}} वापस दें",
+  "Collect {{amount}} more": "{{amount}} और लें",
+  "Nothing to give back or collect": "न कुछ वापस देना, न लेना"
 }
