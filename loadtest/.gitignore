@@ -1,0 +1,4 @@
+# made by seed.py: logins and tokens for the test shops
+shops*.json
+# k6 / locust reports
+results/
