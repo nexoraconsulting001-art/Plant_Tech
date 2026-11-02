@@ -6,8 +6,10 @@
   python demo_data.py remove --phone 9654346434    # take the demo products, customers and orders out again
 
 Orders follow a fixed plan per day, with shop hours 9 am to 8:30 pm and busier weekends; every order has a
-customer. Seeding and removing touch only rows marked demo=True. Refresh moves the dates of everything in the
-shop (its own test bills too), so it only runs on a shop that has demo data.
+customer. Seeding and removing touch only rows marked demo=True. Seeding marks the shop itself as a demo shop
+(`demo: true` on the business; only this script sets it). Refresh moves the dates of everything in the shop (its
+own test bills too), so it runs only on a shop marked demo, and never with ENV=production (bills there are tax
+records). Seeding is refused in production too; removing demo rows is allowed everywhere.
 """
 import argparse
 import asyncio
@@ -18,12 +20,13 @@ from datetime import date, datetime, timedelta, timezone
 
 from pymongo import ReturnDocument
 
-from common import IST, date_key, money, name_key, new_id, normalize_in_phone, now_ist
+from common import IST, date_key, new_id, normalize_in_phone, now_ist
 from db import get_db
 from routers import library
 from routers.business import SUGGESTED_CATEGORIES, _create_category
 from routers.products import context
 from routers.sales import _next_number, price_lines
+from settings import get_settings
 
 DAYS_BACK = 30
 
@@ -236,6 +239,15 @@ class Shop:
         return made
 
 
+class NotAllowed(RuntimeError):
+    """The demo tools refuse this shop or this server."""
+
+
+def refuse_in_production(action: str):
+    if get_settings().is_production:
+        raise NotAllowed(f"demo {action} is blocked on production (ENV=production)")
+
+
 async def find_owner(db, phone: str) -> dict:
     owner = await db.users.find_one({"phone": normalize_in_phone(phone), "role": "owner"}, {"_id": 0})
     if not owner:
@@ -250,6 +262,7 @@ async def remove_demo(db, business_id: str):
 
 
 async def seed(db, phone: str, now: datetime | None = None, force: bool = False) -> dict:
+    refuse_in_production("seed")
     now = (now or now_ist()).astimezone(IST)
     shop = Shop(db, await find_owner(db, phone))
     bid = shop.bid
@@ -257,6 +270,7 @@ async def seed(db, phone: str, now: datetime | None = None, force: bool = False)
         if not force:
             return {"seeded": False, "reason": "already has demo data (use --force to start again)"}
         await remove_demo(db, bid)
+    await db.businesses.update_one({"id": bid}, {"$set": {"demo": True}})
 
     start = now - timedelta(days=DAYS_BACK)
     start_day = start.date()
@@ -320,11 +334,12 @@ async def shift_dates(db, business_id: str, days: int) -> int:
 
 
 async def refresh(db, phone: str, today: date | None = None) -> dict:
-    """Daily: move all the shop's dates forward so its newest day of orders is today."""
+    """Daily: move all the shop's dates forward so its newest day of orders is today. Only on a demo shop."""
+    refuse_in_production("refresh")
     today = today or now_ist().date()
     shop = Shop(db, await find_owner(db, phone))
-    if not await db.products.find_one({"business_id": shop.bid, "demo": True}):
-        return {"shifted_days": 0, "note": "not a demo shop (no demo data): nothing moved"}
+    if not (await db.businesses.find_one({"id": shop.bid}, {"_id": 0, "demo": 1}) or {}).get("demo"):
+        raise NotAllowed("not a demo shop (the business is not marked demo): nothing moved")
     newest = await db.invoices.find({"business_id": shop.bid}, {"_id": 0, "date_key": 1}).sort("date_key", -1).limit(1).to_list(1)
     if not newest:
         return {"shifted_days": 0, "note": "no orders"}
@@ -354,7 +369,11 @@ def main():
         await remove_demo(db, (await find_owner(db, args.phone))["business_id"])
         return {"removed": True}
 
-    result = asyncio.run(run())
+    try:
+        result = asyncio.run(run())
+    except NotAllowed as e:
+        print(datetime.now(IST).strftime("%Y-%m-%d %H:%M"), args.action, "refused:", e, file=sys.stderr, flush=True)
+        return 3
     print(datetime.now(IST).strftime("%Y-%m-%d %H:%M"), args.action, result, flush=True)
     return 0
 

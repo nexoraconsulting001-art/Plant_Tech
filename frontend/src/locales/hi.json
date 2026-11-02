@@ -791,5 +791,13 @@
   "The GST number saved for your shop is not valid. Please correct it in Shop details.": "आपकी दुकान का सेव किया गया GST नंबर सही नहीं है। कृपया इसे दुकान की जानकारी में ठीक करें।",
   "{{hsn}} is not a valid HSN or SAC code. It has 4, 6 or 8 digits.": "{{hsn}} सही HSN या SAC कोड नहीं है। इसमें 4, 6 या 8 अंक होते हैं।",
   "An exempt category has 0% GST. Set its GST to 0% or turn off Exempt.": "टैक्स-छूट वाली कैटेगरी पर GST 0% होता है। उसका GST 0% करें या छूट बंद करें।",
-  "Please upload the logo again.": "कृपया लोगो फिर से अपलोड करें।"
+  "Please upload the logo again.": "कृपया लोगो फिर से अपलोड करें।",
+  "GST returns need the shop's GSTIN. Please add it in Shop details.": "GST रिटर्न के लिए दुकान का GSTIN ज़रूरी है। कृपया इसे दुकान की जानकारी में जोड़ें।",
+  "An export of your shop is already being prepared.": "आपकी दुकान का एक्सपोर्ट पहले से तैयार हो रहा है।",
+  "Export not found.": "एक्सपोर्ट नहीं मिला।",
+  "This download link has expired. Please open the export again.": "इस डाउनलोड लिंक का समय ख़त्म हो गया है। कृपया एक्सपोर्ट फिर से खोलें।",
+  "Please choose a valid date.": "कृपया सही तारीख़ चुनें।",
+  "{{n}} bill lines have no HSN code. Set HSN codes on your categories before filing.": "{{n}} बिल लाइनों में HSN कोड नहीं है। रिटर्न भरने से पहले अपनी कैटेगरी में HSN कोड डालें।",
+  "{{n}} bills were made without GST and are shown as exempt supplies. Ask your CA about them.": "{{n}} बिल बिना GST के बने थे, इसलिए छूट वाली सप्लाई में दिखाए गए हैं। इनके बारे में अपने CA से पूछें।",
+  "{{n}} bills of this month were cancelled after the month ended. If the return is already filed, ask your CA about an amendment.": "इस महीने के {{n}} बिल महीना ख़त्म होने के बाद रद्द हुए। अगर रिटर्न भरा जा चुका है, तो उसमें सुधार (amendment) के बारे में अपने CA से पूछें।"
 }
