@@ -1,0 +1,26 @@
+"""Customer search fields (name_key, name_words, phone10, phone10_rev) filled in, and their indexes.
+
+Every customer without the fields gets them (routers/customers.py `search_fields`), in batches. Indexes:
+{business_id, name_key, id} for the list by name and its pages, {business_id, name_words} and {business_id,
+phone10} / {business_id, phone10_rev} for search from the start of a word or of the number's first or last
+digits, and {business_id, last_purchase_at: -1} for "most recent customers" when an order starts.
+"""
+from pymongo import UpdateOne
+
+from routers.customers import search_fields
+
+BATCH = 1000
+
+
+async def up(db):
+    while True:
+        todo = await db.customers.find({"name_key": None}, {"_id": 1, "name": 1, "phone": 1}).limit(BATCH).to_list(BATCH)
+        if not todo:
+            break
+        await db.customers.bulk_write([UpdateOne({"_id": c["_id"]}, {"$set": search_fields(c.get("name", ""), c.get("phone"))})
+                                       for c in todo], ordered=False)
+    await db.customers.create_index([("business_id", 1), ("name_key", 1), ("id", 1)])
+    await db.customers.create_index([("business_id", 1), ("name_words", 1)])
+    await db.customers.create_index([("business_id", 1), ("phone10", 1)])
+    await db.customers.create_index([("business_id", 1), ("phone10_rev", 1)])
+    await db.customers.create_index([("business_id", 1), ("last_purchase_at", -1)])

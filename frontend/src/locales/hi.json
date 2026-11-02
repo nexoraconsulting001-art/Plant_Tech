@@ -761,5 +761,7 @@
   "Give back {{amount}}": "{{amount}} वापस दें",
   "Collect {{amount}} more": "{{amount}} और लें",
   "Nothing to give back or collect": "न कुछ वापस देना, न लेना",
-  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।"
+  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।",
+  "This list has changed. Please refresh it.": "यह सूची बदल गई है। कृपया इसे फिर से खोलें।",
+  "This customer's details have been erased.": "इस ग्राहक की जानकारी मिटा दी गई है।"
 }
