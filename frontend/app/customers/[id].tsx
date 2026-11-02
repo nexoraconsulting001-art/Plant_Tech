@@ -16,7 +16,9 @@ import type { Customer, Invoice } from "@/src/types";
 type PastBill = {
   id: string; invoice_number: string; grand_total: number; created_at: string; payment_method?: Invoice["payment_method"];
   items: { name: string; quantity: number }[];
+  status?: Invoice["status"]; // a cancelled bill is listed greyed; it is not in the customer's totals
 };
+const off = (b: PastBill) => b.status === "Cancelled";
 
 export default function CustomerDetail() {
   const { t } = useTranslation();
@@ -98,7 +100,7 @@ export default function CustomerDetail() {
             {c.invoices.length ? c.invoices.map((b) => (
               <Pressable key={b.id} onPress={() => router.push({ pathname: "/bill/[id]", params: { id: b.id } })}
                 style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 68, borderRadius: radius.lg,
-                  borderWidth: 1, borderColor: colors.line, opacity: pressed ? 0.85 : 1 })}>
+                  borderWidth: 1, borderColor: colors.line, backgroundColor: off(b) ? colors.page : undefined, opacity: pressed ? 0.85 : 1 })}>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <T v="bold">{formatDate(b.created_at)}</T>
                   <T v="small">
@@ -106,9 +108,11 @@ export default function CustomerDetail() {
                   </T>
                 </View>
                 <View style={{ alignItems: "flex-end" }}>
-                  <T v="number">{formatCurrency(b.grand_total)}</T>
-                  <T v="caption" testID={`customer-bill-${b.invoice_number}`}>
-                    {[b.invoice_number, b.payment_method ? t(b.payment_method) : ""].filter(Boolean).join(" · ")}
+                  <T v="number" color={off(b) ? colors.muted : undefined} style={off(b) ? { textDecorationLine: "line-through" } : undefined}>
+                    {formatCurrency(b.grand_total)}
+                  </T>
+                  <T v="caption" testID={`customer-bill-${b.invoice_number}`} color={off(b) ? colors.red : undefined}>
+                    {[b.invoice_number, off(b) ? t("Cancelled") : b.payment_method ? t(b.payment_method) : ""].filter(Boolean).join(" · ")}
                   </T>
                 </View>
               </Pressable>

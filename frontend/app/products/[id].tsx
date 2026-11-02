@@ -29,6 +29,7 @@ export default function ProductDetail() {
 
   const what = (h: StockEntry) =>
     h.type === "initial" ? t("Opening stock") : h.type === "sale" ? t("Sold") : h.type === "purchase" ? t("Supplier bill")
+      : h.type === "bill_cancel" ? t("Bill {{no}} cancelled", { no: h.bill ?? "" }) : h.type === "bill_correct" ? t("Bill corrected ({{no}})", { no: h.bill ?? "" })
       : h.change > 0 ? t("Stock added") : h.reason && h.reason !== "Removed" ? h.reason : t("Removed");
 
   return (

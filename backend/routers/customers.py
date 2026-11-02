@@ -111,6 +111,6 @@ async def get_customer(customer_id: str, user: dict = Depends(auth.require("cust
         raise HTTPException(404, "Customer not found.")
     bills = await db.invoices.find({"business_id": user["business_id"], "customer_id": customer_id},
                                    {"_id": 0, "id": 1, "invoice_number": 1, "grand_total": 1, "created_at": 1,
-                                    "payment_method": 1, "items.name": 1, "items.quantity": 1}
+                                    "payment_method": 1, "status": 1, "replaced_by": 1, "items.name": 1, "items.quantity": 1}
                                    ).sort("created_at", -1).to_list(200)
     return {**c, "invoices": bills}

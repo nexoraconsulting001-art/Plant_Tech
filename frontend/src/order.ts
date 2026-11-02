@@ -2,6 +2,9 @@
 // allowShort: the owner saw "Stock will go to -2" and went ahead. If the stock ran out meanwhile (another phone
 // sold it), the owner is asked once more; an employee is told to ask the owner.
 // upiId: the shop's UPI ID shown in the QR, kept on the bill.
+// Correcting a bill (cart.correcting): the same order goes to /invoices/{id}/correct, which cancels the old bill and
+// makes this one with a new number. If the bill can no longer be corrected (cancelled meanwhile, or the days are
+// over), the owner is told and the correction is dropped.
 import { useState } from "react";
 import { useRouter } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -11,7 +14,7 @@ import { ApiError, apiPost } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { isLoose, useCart } from "@/src/cart-context";
 import { useToast } from "@/src/components/toast";
-import { confirm } from "@/src/confirm";
+import { confirm, notice } from "@/src/confirm";
 import { askOwner } from "@/src/stock";
 import type { Invoice } from "@/src/types";
 
@@ -26,7 +29,8 @@ export function useCreateBill() {
   const { isOwner } = useAuth();
   const [busy, setBusy] = useState(false);
 
-  const send = (method: PaymentMethod, allowShort: boolean, upiId?: string): Promise<Invoice> => apiPost("/invoices", {
+  const fixing = cart.correcting;
+  const send = (method: PaymentMethod, allowShort: boolean, upiId?: string): Promise<Invoice> => apiPost(fixing ? `/invoices/${fixing.id}/correct` : "/invoices", {
     items: cart.items.map((i) => ({ product_id: isLoose(i.product_id) ? null : i.product_id, name: i.name, quantity: i.quantity, price: i.price,
       unit: i.unit ?? null })),
     customer_id: cart.customer!.id,
@@ -59,6 +63,12 @@ export function useCreateBill() {
       router.dismissTo("/(tabs)");
       router.push({ pathname: "/bill/[id]", params: { id: inv.id, done: "1" } });
     } catch (e: any) {
+      if (fixing && e instanceof ApiError && (e.code === "bill_cancelled" || e.code === "bill_locked")) {
+        await notice(t("This bill can't be corrected"), e.message);
+        await cart.discard();
+        router.dismissTo("/(tabs)");
+        return;
+      }
       toast.show(e.message, "error");
     } finally {
       setBusy(false);

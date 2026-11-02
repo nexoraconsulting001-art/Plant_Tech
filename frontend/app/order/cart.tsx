@@ -1,6 +1,7 @@
 // The order: change how many, the price for this customer, remove, discount, then take payment.
 // A changed price shows the shop's price struck through; once billed nothing can be changed.
 // More than the stock count: the owner may (a warning shows what the stock will go to), an employee may not.
+// Correcting a bill: a banner says which; a bill from before every bill had a customer asks for one first.
 import { useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
@@ -9,7 +10,7 @@ import { useTranslation } from "react-i18next";
 
 import { useAuth } from "@/src/auth";
 import { CartItem, isLoose, useCart } from "@/src/cart-context";
-import { DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer";
+import { CorrectionBanner, DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer";
 import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, EmptyState, Field, Header, Icon, MAX_FONT_SCALE, Screen, Stepper, T, Thumb, Toggle } from "@/src/components/ui";
 import { formatCurrency, plural } from "@/src/format";
@@ -23,11 +24,13 @@ export default function OrderCart() {
   const cart = useCart();
   const { isOwner } = useAuth();
   const back = () => (router.canGoBack() ? router.back() : router.replace("/order/scan"));
+  const pickCustomer = () => router.push({ pathname: "/order/customer", params: { change: "1" } });
 
   if (!cart.items.length) {
     return (
       <Screen bg={colors.surface}>
         <Header title={t("Order")} onBack={back} right={<DiscardOrder />} />
+        {!!cart.correcting && <View style={{ padding: spacing.lg, paddingBottom: 0 }}><CorrectionBanner /></View>}
         <EmptyState icon="cart-outline" title={t("Nothing in this order yet")}
           action={<Button title={t("Add items")} icon="camera" onPress={() => router.replace("/order/scan")} />} />
       </Screen>
@@ -38,7 +41,11 @@ export default function OrderCart() {
     <Screen bg={colors.surface}>
       <Header title={`${t("Order")} · ${plural(cart.count, "1 item", "{{n}} items")}`} onBack={back} right={<DiscardOrder />} />
       <KeyboardAwareScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }} bottomOffset={24}>
+        <CorrectionBanner />
         <OrderCustomerBar />
+        {!cart.customer && (
+          <Button title={t("Choose the customer")} icon="account-plus" variant="dashed" size="md" onPress={pickCustomer} testID="cart-pick-customer" />
+        )}
         {cart.items.map((it) => <Line key={it.product_id} it={it} />)}
 
         <Button title={t("Add more items")} icon="plus" variant="dashed" size="md" onPress={back} testID="cart-add-more" />
@@ -66,7 +73,7 @@ export default function OrderCart() {
           </View>
           <T v="amount" testID="cart-total">{formatCurrency(cart.total)}</T>
         </View>
-        <Button title={t("Take payment")} icon="cash-register" onPress={() => router.push("/order/pay")} testID="cart-pay" />
+        <Button title={t("Take payment")} icon="cash-register" onPress={() => (cart.customer ? router.push("/order/pay") : pickCustomer())} testID="cart-pay" />
       </BottomBar>
     </Screen>
   );

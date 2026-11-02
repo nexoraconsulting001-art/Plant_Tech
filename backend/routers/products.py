@@ -53,11 +53,13 @@ class StockIn(BaseModel):
     reason: str = Field("Added", max_length=80)
 
 
-async def record_stock(db, user: dict, product: dict, change: float, new_stock: float, kind: str, reason: str = ""):
+async def record_stock(db, user: dict, product: dict, change: float, new_stock: float, kind: str, reason: str = "",
+                       bill: str = ""):
+    """kind: initial, sale, adjustment, purchase, bill_cancel or bill_correct (`bill` = the bill's number for these two)."""
     await db.stock_history.insert_one({
         "id": new_id(), "business_id": user["business_id"], "product_id": product["id"],
         "product_name": product["name"], "change": change, "new_stock": new_stock, "type": kind, "reason": reason,
-        "by": {"id": user["id"], "name": user.get("name", "")}, "created_at": now_iso()})
+        **({"bill": bill} if bill else {}), "by": {"id": user["id"], "name": user.get("name", "")}, "created_at": now_iso()})
     await notify.stock_changed(db, user["business_id"], product, new_stock - change, new_stock)
 
 

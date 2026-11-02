@@ -13,8 +13,9 @@ export type Product = {
 };
 
 export type StockEntry = {
-  id: string; change: number; new_stock: number; type: "initial" | "sale" | "adjustment" | "purchase";
-  reason: string; by?: { id: string; name: string }; created_at: string;
+  id: string; change: number; new_stock: number; type: "initial" | "sale" | "adjustment" | "purchase" | "bill_cancel" | "bill_correct";
+  reason: string; bill?: string; // bill_cancel / bill_correct: the bill's number
+  by?: { id: string; name: string }; created_at: string;
 };
 
 export type LibraryEntry = {
@@ -41,7 +42,16 @@ export type Invoice = {
   upi_id?: string; // UPI bills: the shop's UPI ID it was paid to
   shop?: { name: string; address: string; phone: string }; // the shop today (single bill only)
   created_by: { id: string; name: string }; created_at: string;
+  gst_removed?: boolean;
+  // Correcting or cancelling (the owner, until correct_until). A cancelled bill counts nowhere; a correction is a new
+  // bill that replaces the old one (none of these on servers before corrections existed).
+  status?: "Paid" | "Cancelled";
+  correct_until?: string;
+  cancelled_at?: string; cancelled_by?: { id: string; name: string }; cancel_reason?: string;
+  replaced_by?: BillRef; replaces?: BillRef; corrected_by?: { id: string; name: string };
 };
+
+export type BillRef = { id: string; invoice_number: string };
 
 export type Customer = {
   id: string; name: string; phone: string; email: string; address: string; notes: string;

@@ -3,6 +3,7 @@
 // so a quick tap never bills UPI without the QR).
 // The stock of the order's products is checked again here. Not enough: the owner sees what each stock will go
 // to and confirms before billing; an employee is asked to change the order or get the stock updated.
+// Correcting a bill: what the old bill took counts as back in stock, and the bill made is the corrected one.
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { Redirect, useRouter } from "expo-router";
@@ -14,7 +15,7 @@ import { useAuth } from "@/src/auth";
 import { businessQuery, upiList, useBusiness } from "@/src/business";
 import { isLoose, useCart } from "@/src/cart-context";
 import { confirm, notice } from "@/src/confirm";
-import { OrderCustomerBar } from "@/src/components/order-customer";
+import { CorrectionBanner, OrderCustomerBar } from "@/src/components/order-customer";
 import { useToast } from "@/src/components/toast";
 import { Button, Header, Icon, IconName, Screen, T } from "@/src/components/ui";
 import { formatCurrency, plural } from "@/src/format";
@@ -47,10 +48,11 @@ export default function OrderPay() {
   const ids = [...want.keys()].sort().join(",");
   const fresh = useQuery<Product[]>({ queryKey: ["products", "stock", ids], queryFn: () => apiGet(`/products?ids=${ids}`), enabled: !!ids,
     staleTime: 0 }); // always the latest count
-  const short = (fresh.data ?? []).filter((p) => (want.get(p.id) ?? 0) > p.stock + 1e-9)
-    .map((p) => (isOwner ? shortWarning(p.name, p.stock, want.get(p.id)!, p.unit) : askOwner(p.name, p.stock, p.unit)));
+  const stockOf = (p: Product) => p.stock + cart.returning(p.id); // a correction gives the old bill's quantity back first
+  const short = (fresh.data ?? []).filter((p) => (want.get(p.id) ?? 0) > stockOf(p) + 1e-9)
+    .map((p) => (isOwner ? shortWarning(p.name, stockOf(p), want.get(p.id)!, p.unit) : askOwner(p.name, stockOf(p), p.unit)));
 
-  if (openedWithout) return <Redirect href="/order/customer" />;
+  if (openedWithout) return <Redirect href={cart.correcting ? { pathname: "/order/customer", params: { change: "1" } } : "/order/customer"} />;
 
   async function pay(m: PaymentMethod) {
     if (short.length && !isOwner) {
@@ -84,6 +86,7 @@ export default function OrderPay() {
     <Screen bg={colors.surface}>
       <Header title={t("Payment")} />
       <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
+        <CorrectionBanner />
         <View style={{ alignItems: "center", padding: spacing.lg, borderRadius: radius.xl, backgroundColor: colors.greenTint }}>
           <T v="label" color={colors.greenDark}>{t("Customer pays")}</T>
           <T v="amount" style={{ fontSize: 52, lineHeight: 58 }} testID="pay-total">{formatCurrency(cart.total)}</T>
@@ -127,7 +130,8 @@ export default function OrderPay() {
             ))}
           </View>
           <T v="small" style={{ textAlign: "center" }}>
-            {bill.busy ? t("Creating the bill") : t("Select the payment method. The bill is created immediately.")}
+            {bill.busy ? t("Creating the bill") : cart.correcting ? t("Select the payment method. The corrected bill is created immediately.")
+              : t("Select the payment method. The bill is created immediately.")}
           </T>
         </View>
       </ScrollView>

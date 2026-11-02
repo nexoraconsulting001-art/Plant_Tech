@@ -39,8 +39,9 @@ export default function OrderScan() {
   const toast = useToast();
   const cart = useCart();
   const { can } = useAuth();
-  // Opened with no customer (a reload, an old link): pick one first. Not when the order is cleared while open (Discard).
-  const [openedWithout] = useState(() => !cart.customer);
+  // Opened with no customer (a reload, an old link): pick one first. Not when the order is cleared while open (Discard),
+  // nor when correcting an old bill that had none (the order screen asks for one).
+  const [openedWithout] = useState(() => !cart.customer && !cart.correcting);
   const [stage, setStage] = useState<Stage>({ kind: "start" });
   const [photo, setPhoto] = useState<CaptureResult | null>(null);
   const [focusSearch, setFocusSearch] = useState(0);
@@ -237,8 +238,10 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
   const toast = useToast();
   const { can, isOwner } = useAuth();
   const inCart = cart.items.find((i) => i.product_id === p.id)?.quantity ?? 0;
+  const back = cart.returning(p.id); // correcting a bill: what that bill took counts as back in stock
+  const stock = roundQty(p.stock + back, false);
   const whole = wholeUnit(p.unit);
-  const left = Math.max(0, roundQty(p.stock - inCart, false));
+  const left = Math.max(0, roundQty(stock - inCart, false));
   const [qty, setQty] = useState(() => (whole ? 1 : Math.min(1, left) || 1)); // 0.5 kg left: start at 0.5
   const short = qty > left + 1e-9; // only the owner gets here with more than is left
   const blocked = !isOwner && left <= 0; // an employee can't sell what isn't in stock
@@ -249,7 +252,7 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
   // Always a line of this product (with its GST), even when selling without stock.
   function add(next: "scan" | "cart") {
     cart.addItem({ product_id: p.id, name: p.name, price: p.selling_price, quantity: qty, gst_percent: p.gst_percent, image_path: p.image_path,
-      stock: p.stock, unit: p.unit });
+      stock, unit: p.unit });
     onAdded(next);
   }
 
@@ -274,7 +277,8 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
           </View>
           <View style={{ flex: 1, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: left ? colors.page : "#FDECEC" }}>
             <T v="label">{t("In stock")}</T>
-            <T v="title" color={left ? colors.ink : colors.red}>{formatQtyUnit(p.stock, p.unit)}</T>
+            <T v="title" color={left ? colors.ink : colors.red}>{formatQtyUnit(stock, p.unit)}</T>
+            {back > 0 && <T v="caption">{t("Includes {{n}} from the bill being corrected", { n: formatQtyUnit(back, p.unit) })}</T>}
             {inCart > 0 && <T v="caption">{t("{{n}} already in this order", { n: formatQtyUnit(inCart, p.unit) })}</T>}
           </View>
         </View>
@@ -283,14 +287,14 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <T v="bodyLarge">{t("Quantity")}</T>
             <Stepper value={qty} onChange={setQty} min={whole ? 1 : 0.001} max={isOwner ? MAX_QTY : left} decimals={!whole} unit={unitShort(p.unit)}
-              onLimit={isOwner ? undefined : () => toast.show(askOwner(p.name, p.stock, p.unit), "error")} testID="found-qty" />
+              onLimit={isOwner ? undefined : () => toast.show(askOwner(p.name, stock, p.unit), "error")} testID="found-qty" />
           </View>
         )}
         {(blocked || short) && (
           <View testID="found-short" style={{ gap: spacing.md, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: blocked ? colors.redTint : colors.amberTint }}>
-            <T v="bold" color={blocked ? colors.red : colors.amberInk}>{p.stock > 0 ? t("Not enough stock") : t("Out of stock")}</T>
+            <T v="bold" color={blocked ? colors.red : colors.amberInk}>{stock > 0 ? t("Not enough stock") : t("Out of stock")}</T>
             <T v="small" color={blocked ? colors.red : colors.amberInk}>
-              {blocked ? askOwner(p.name, p.stock, p.unit) : shortWarning(p.name, p.stock, inCart + qty, p.unit)}
+              {blocked ? askOwner(p.name, stock, p.unit) : shortWarning(p.name, stock, inCart + qty, p.unit)}
             </T>
             {!blocked && <T v="small" color={colors.amberInk}>{t("You can still sell it if you have it on hand. Update the stock count afterwards.")}</T>}
             {can("stock") && (
