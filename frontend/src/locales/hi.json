@@ -761,5 +761,10 @@
   "Give back {{amount}}": "{{amount}} वापस दें",
   "Collect {{amount}} more": "{{amount}} और लें",
   "Nothing to give back or collect": "न कुछ वापस देना, न लेना",
-  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।"
+  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।",
+  "Your shop has used its {{limit}} MB of photo storage. Please contact support to add more.": "आपकी दुकान ने फ़ोटो के लिए अपनी {{limit}} MB जगह इस्तेमाल कर ली है। और जगह के लिए कृपया सपोर्ट से संपर्क करें।",
+  "Direct upload is not available. Please send the photo the usual way.": "सीधा अपलोड उपलब्ध नहीं है। कृपया फ़ोटो सामान्य तरीके से भेजें।",
+  "Upload not found. Please start again.": "अपलोड नहीं मिला। कृपया दोबारा शुरू करें।",
+  "This photo is still being saved. Please wait a moment.": "यह फ़ोटो अभी सेव हो रही है। कृपया थोड़ा रुकें।",
+  "The photo did not reach the server. Please try again.": "फ़ोटो सर्वर तक नहीं पहुँची। कृपया फिर कोशिश करें।"
 }
