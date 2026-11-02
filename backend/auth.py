@@ -11,6 +11,7 @@ import bcrypt
 import jwt
 from fastapi import Depends, Header, HTTPException
 
+import observability
 from common import normalize_in_phone
 from db import get_db
 
@@ -94,6 +95,7 @@ async def current_user(authorization: str | None = Header(None)) -> dict:
         raise HTTPException(401, "Please log in again.")
     if not user.get("active", True):
         raise HTTPException(403, "This login has been turned off. Please contact the shop owner.")
+    observability.bind_user(user)  # business_id and user_id on this request's log lines and errors
     return user
 
 

@@ -1,6 +1,6 @@
 """Bills: tax-inclusive GST, stock, customers, reports, and the customer's bill link."""
 import invoice_html
-from conftest import Shop, photo_b64
+from conftest import Shop, photo_b64, run
 
 
 def _order(shop, items, **extra):
@@ -193,7 +193,6 @@ def test_customer_needs_name_and_phone_and_can_be_found(client):
 
 
 def test_one_saved_order_per_customer(client):
-    import asyncio
     from datetime import datetime, timedelta, timezone
     import db as db_module
 
@@ -229,7 +228,7 @@ def test_one_saved_order_per_customer(client):
     # a saved order untouched for 8 days is dropped
     put(shop.h, {"customer_id": kavita["id"], "items": [item]})
     old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-    asyncio.run(db_module.state.db.carts.update_many({}, {"$set": {"updated_at": old}}))
+    run(db_module.state.db.carts.update_many({}, {"$set": {"updated_at": old}}))
     assert get(shop.h, kavita["id"]) is None
 
 

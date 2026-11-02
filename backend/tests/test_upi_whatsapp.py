@@ -1,8 +1,7 @@
 """Several UPI IDs per shop (one default), the UPI ID kept on UPI bills, and the WhatsApp-the-bill setting."""
-import asyncio
 
 import db as db_module
-from conftest import Shop
+from conftest import Shop, run
 
 
 def _order(shop, product, headers=None, **extra):
@@ -30,7 +29,7 @@ def test_old_single_upi_becomes_the_default_entry(client):
 
 def test_shop_saved_before_the_list_is_migrated_on_read(client):
     shop = Shop(client)
-    asyncio.run(db_module.state.db.businesses.update_one(
+    run(db_module.state.db.businesses.update_one(
         {}, {"$unset": {"upi_ids": "", "default_upi": "", "whatsapp_bill": ""}, "$set": {"upi_id": "old@ybl"}}))
     biz = shop.get("/api/business").json()
     assert [e["upi_id"] for e in biz["upi_ids"]] == ["old@ybl"] and biz["upi_id"] == "old@ybl"
@@ -67,7 +66,7 @@ def test_upi_ids_are_checked(client):
 
 def test_a_upi_id_saved_before_the_check_does_not_block_other_edits(client):
     shop = Shop(client)
-    asyncio.run(db_module.state.db.businesses.update_one({}, {"$set": {"upi_ids": [{"id": "x", "upi_id": "shop upi", "label": ""}],
+    run(db_module.state.db.businesses.update_one({}, {"$set": {"upi_ids": [{"id": "x", "upi_id": "shop upi", "label": ""}],
                                                                        "default_upi": "x", "upi_id": "shop upi"}}))
     r = shop.c.put("/api/business", headers=shop.h, json={"upi_id": "shop upi", "name": "New name"})  # 1.1.0 sends it back
     assert r.status_code == 200 and r.json()["name"] == "New name"

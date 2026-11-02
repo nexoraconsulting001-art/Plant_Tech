@@ -4,6 +4,8 @@ Claude, with a demo shop. Nothing leaves the computer and nothing is kept after 
 Run (from anywhere, with the packages of requirements.txt and requirements-dev.txt installed):
     python backend/tests/devserver.py
 - Port 8001. Demo owner 9000000009, password from DEV_DEMO_PASSWORD; shop "Green House" with demo data.
+- In-memory mongomock (mongomock-motor from requirements-dev.txt): no transactions, nothing kept. The migrations
+  run at start (AUTO_MIGRATE), so the starter library is there; no Redis needed (jobs run in the process).
 - The fake Claude answers from fake_ai.json in the dev folder printed at start (re-read on every call),
   keyed "plant" / "invoice" / "names"; edit it to try other answers (a laptop, a bill, two suppliers).
 """
@@ -17,11 +19,12 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parent.parent
 DEV = Path(tempfile.gettempdir()) / "hara-hisaab-dev"
 os.environ.update(
-    MONGO_URL="mongodb://localhost:27017", DB_NAME="dev", STORAGE_BACKEND="local",
+    ENV="dev", AUTO_MIGRATE="1", MONGO_URL="mongodb://localhost:27017", MONGO_DB="dev", DB_NAME="dev", STORAGE_BACKEND="local",
     LOCAL_STORAGE_DIR=str(DEV / "uploads"), JWT_SECRET="dev-secret-0123456789-abcdefghijklmnopqrstuv",
     ADMIN_PHONES="9000000009", AI_DAILY_LIMIT="300", PUBLIC_BASE_URL="http://localhost:8001",
 )
-os.environ.pop("GOOGLE_CLIENT_IDS", None)
+for name in ("GOOGLE_CLIENT_IDS", "REDIS_URL", "SENTRY_DSN"):
+    os.environ.pop(name, None)
 sys.path.insert(0, str(BACKEND))
 os.chdir(tempfile.gettempdir())  # never load a backend/.env
 

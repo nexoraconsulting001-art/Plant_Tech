@@ -1,8 +1,7 @@
 """Customers: editing one, and the customer's address on their bills."""
-import asyncio
 
 import db as db_module
-from conftest import Shop
+from conftest import Shop, run
 
 
 def _bill(shop, customer_id):
@@ -76,7 +75,7 @@ def test_old_bill_without_address_still_renders(client):
     c = shop.post("/api/customers", {"name": "Meena", "phone": "9811100066", "address": "12 Mall Road"}).json()
     inv = _bill(shop, c["id"])
     db = db_module.state.db  # a bill made before addresses were kept has no such field
-    asyncio.run(db.invoices.update_one({"id": inv["id"]}, {"$unset": {"customer_address": ""}}))
+    run(db.invoices.update_one({"id": inv["id"]}, {"$unset": {"customer_address": ""}}))
     assert "customer_address" not in shop.get(f"/api/invoices/{inv['id']}").json()
     page = shop.get(f"/api/invoices/{inv['id']}/html").text
     assert "Meena" in page and "12 Mall Road" not in page and 'class="m addr"' not in page

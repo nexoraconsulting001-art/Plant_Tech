@@ -1,8 +1,7 @@
 """Supplier bills: stock, new products priced at the shop's profit %, one supplier record per supplier."""
-import asyncio
 
 import db as db_module
-from conftest import Shop, photo_b64
+from conftest import Shop, photo_b64, run
 from routers import suppliers
 
 
@@ -91,10 +90,10 @@ def test_backfill_links_old_purchases_and_runs_twice_safely(client):
     bid = client.get("/api/auth/me", headers=shop.h).json()["business"]["id"]
     db = db_module.state.db
     for no in ("A-1", "A-2"):  # saved before suppliers existed: a name only
-        asyncio.run(db.purchases.insert_one({"id": no, "business_id": bid, "supplier": "Green Farms Ltd",
+        run(db.purchases.insert_one({"id": no, "business_id": bid, "supplier": "Green Farms Ltd",
                                              "invoice_number": no, "items": [], "total": 10, "created_at": "2026-10-01"}))
-    asyncio.run(suppliers.backfill(db))
-    asyncio.run(suppliers.backfill(db))
+    run(suppliers.backfill(db))
+    run(suppliers.backfill(db))
     sups = shop.get("/api/suppliers").json()
     assert len(sups) == 1 and sups[0]["bills"] == 2
 

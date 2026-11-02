@@ -1,10 +1,9 @@
 """Correcting or cancelling a bill: the owner only, within 7 days of the first bill, never in place."""
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 import db as db_module
 from common import date_key
-from conftest import Shop
+from conftest import Shop, run
 from routers import sales
 
 
@@ -29,7 +28,7 @@ def _customer(shop, cid):
 
 
 def _set(where, change):
-    asyncio.run(db_module.state.db.invoices.update_one(where, change))
+    run(db_module.state.db.invoices.update_one(where, change))
 
 
 def _age(inv_id, days):
@@ -254,7 +253,7 @@ def test_demo_refresh_moves_correction_times_too(client):
     old = _bill(shop, [_line(rose, 2)])
     new = shop.post(f"/api/invoices/{old['id']}/correct", {"items": [_line(rose, 1)], "customer_id": old["customer_id"]}).json()
     cancelled_at = shop.get(f"/api/invoices/{old['id']}").json()["cancelled_at"]
-    asyncio.run(demo_data.shift_dates(db_module.state.db, old["business_id"], 2))
+    run(demo_data.shift_dates(db_module.state.db, old["business_id"], 2))
     moved = lambda iso: (datetime.fromisoformat(iso) + timedelta(days=2)).isoformat()  # noqa: E731
     was, now = shop.get(f"/api/invoices/{old['id']}").json(), shop.get(f"/api/invoices/{new['id']}").json()
     assert was["cancelled_at"] == moved(cancelled_at)

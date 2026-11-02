@@ -1,17 +1,15 @@
 """Owner notifications: phone sign-up, low-stock alerts, the daily summary, and the Expo sender. Nothing is sent
 for real: `push.dispatch` is replaced to collect the messages, and `push.send` gets a fake Expo."""
-import asyncio
 from datetime import datetime
 
 import httpx
 import pytest
-from mongomock_motor import AsyncMongoMockClient
 
 import db as db_module
 import notify
 import push
 from common import IST, date_key
-from conftest import Shop
+from conftest import Shop, run
 
 TOKEN = "ExponentPushToken[abcdefgh12345678]"
 TOKEN2 = "ExponentPushToken[zyxwvuts87654321]"
@@ -36,7 +34,7 @@ def _sign_up(shop, token=TOKEN, lang="en", headers=None):
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    return run(coro)
 
 
 def test_only_owners_sign_up_a_phone(client):
@@ -209,8 +207,8 @@ def test_send_posts_to_expo(monkeypatch):
     assert str(seen[0].url) == push.PUSH_URL and seen[0].headers["authorization"] == "Bearer expo-key"
 
 
-def test_deliver_drops_phones_without_the_app(monkeypatch):
-    db = AsyncMongoMockClient()["push"]
+def test_deliver_drops_phones_without_the_app(client, monkeypatch):
+    db = db_module.state.db
 
     async def fake_send(messages, client=None):
         return [{"status": "ok"}, {"status": "error", "message": "gone", "details": {"error": "DeviceNotRegistered"}}]
@@ -224,12 +222,12 @@ def test_deliver_drops_phones_without_the_app(monkeypatch):
     assert _run(go()) == [TOKEN]
 
 
-def test_deliver_never_raises(monkeypatch):
+def test_deliver_never_raises(client, monkeypatch):
     async def down(messages, client=None):
         raise httpx.ConnectError("no network")
 
     monkeypatch.setattr(push, "send", down)
-    _run(push.deliver(AsyncMongoMockClient()["push"], [{"to": TOKEN}]))  # logged, not raised
+    _run(push.deliver(db_module.state.db, [{"to": TOKEN}]))  # logged, not raised
 
 
 def test_a_phone_is_removed_without_a_valid_login(client):

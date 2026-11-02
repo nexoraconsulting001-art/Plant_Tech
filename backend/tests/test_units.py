@@ -1,6 +1,6 @@
 """Units: pieces are whole numbers, kg / litre / metre may be 1.5, plants are always pieces."""
 import invoice_html
-from conftest import Shop, photo_b64
+from conftest import Shop, photo_b64, run
 
 
 def _order(shop, items, **extra):
@@ -25,12 +25,11 @@ def test_products_have_a_unit_and_plants_are_pieces(client):
 
 
 def test_old_products_count_as_pieces(client):
-    import asyncio
     import db as db_module
 
     shop = Shop(client)
     pot = shop.product("Clay Pot", 100, 5, category="Pots")
-    asyncio.run(db_module.state.db.products.update_one({"id": pot["id"]}, {"$unset": {"unit": ""}}))
+    run(db_module.state.db.products.update_one({"id": pot["id"]}, {"$unset": {"unit": ""}}))
     assert shop.get(f"/api/products/{pot['id']}").json()["unit"] == "pcs"
     r = _order(shop, [{"product_id": pot["id"], "name": "Clay Pot", "quantity": 1.5, "price": 100}])
     assert r.status_code == 400 and r.json()["code"] == "whole_quantity"
@@ -95,7 +94,6 @@ def test_bill_products_and_identified_plants(client, claude):
 
 def test_decimal_stock_stays_on_three_decimals(client):
     """0.7 - 0.4 is 0.29999999999999993 in floating point: the last 0.3 kg must still sell, and leave exactly 0."""
-    import asyncio
     import db as db_module
 
     shop = Shop(client, gst=False)
@@ -121,7 +119,7 @@ def test_decimal_stock_stays_on_three_decimals(client):
     assert shop.get(f"/api/products/{soil['id']}").json()["stock"] == 0.4
 
     # stock saved unrounded before this fix still sells in full
-    asyncio.run(db_module.state.db.products.update_one({"id": soil["id"]}, {"$set": {"stock": 0.7 - 0.4}}))
+    run(db_module.state.db.products.update_one({"id": soil["id"]}, {"$set": {"stock": 0.7 - 0.4}}))
     assert sell(0.3).status_code == 200
     assert shop.get(f"/api/products/{soil['id']}").json()["stock"] == 0
     assert sell(0.001).json()["code"] == "out_of_stock"
@@ -145,9 +143,8 @@ def test_saved_order_takes_the_products_unit(client):
     assert put([line(pot, 1.5, unit="kg")]).json()["code"] == "whole_quantity"
 
     # saved before units existed (no unit), then the owner switches the product to litre
-    import asyncio
     import db as db_module
-    asyncio.run(db_module.state.db.carts.update_many({}, {"$set": {"items": [line(soil, 2)]}}))
+    run(db_module.state.db.carts.update_many({}, {"$set": {"items": [line(soil, 2)]}}))
     assert get()["items"][0]["unit"] == "kg"
     client.put(f"/api/products/{soil['id']}", headers=shop.h, json={"unit": "litre"})
     assert get()["items"][0]["unit"] == "litre"

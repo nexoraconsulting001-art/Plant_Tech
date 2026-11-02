@@ -1,18 +1,13 @@
 """Demo shop data: seeded once, refreshed daily by moving every date forward, demo rows removable."""
-import asyncio
 from datetime import datetime, timedelta
 
 import db as db_module
 import demo_data
 from common import now_ist
-from conftest import Shop
+from conftest import Shop, run
 
 # This afternoon: the shop's own test bill below is made with the real clock, so the demo uses the same day.
 NOW = now_ist().replace(hour=15, minute=5, second=0, microsecond=0)
-
-
-def run(coro):
-    return asyncio.run(coro)
 
 
 def test_seed_refresh_remove(client):
@@ -34,7 +29,8 @@ def test_seed_refresh_remove(client):
     assert all(i["customer_id"] for i in invs)  # every order has a customer
     assert max(i["date_key"] for i in invs) == NOW.date().isoformat()  # a full "today"
     assert min(i["date_key"] for i in invs) >= (NOW - timedelta(days=30)).date().isoformat()
-    month = shop.get("/api/reports/sales", params={"range": "month", "date": NOW.date().isoformat()}).json()
+    # the calendar month around two weeks ago always holds at least 15 of the demo's 30 days (not so this month's)
+    month = shop.get("/api/reports/sales", params={"range": "month", "date": (NOW - timedelta(days=15)).date().isoformat()}).json()
     assert month["orders"] > 100 and month["profit"] > 0 and month["top"]
     assert run(demo_data.seed(db, "9811122334", now=NOW))["seeded"] is False  # seeding twice: refused
 

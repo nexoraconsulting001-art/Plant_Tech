@@ -1,5 +1,5 @@
 """Products, stock, categories with GST, and the shared picture library."""
-from conftest import Shop, photo_b64
+from conftest import Shop, photo_b64, run
 
 
 def test_starter_library_and_suggestions(client):
@@ -114,20 +114,19 @@ def test_hindi_typed_product_links_existing_entry(client):
 
 
 def test_name_enrichment_updates_terms_and_hides_non_nursery(client, claude):
-    import asyncio
 
     import db as db_module
     from routers import library
     a, b = Shop(client), Shop(client, phone="9811155667")
     p = a.post("/api/products", {"name": "Holy Basil Plant", "selling_price": 60}).json()
     db = db_module.state.db
-    asyncio.run(library.enrich(db, p["library_id"]))
-    entry = asyncio.run(db.library.find_one({"id": p["library_id"]}))
+    run(library.enrich(db, p["library_id"]))
+    entry = run(db.library.find_one({"id": p["library_id"]}))
     assert entry["name_hi"] == "तुलसी" and "tulsi" in entry["aliases"] and entry["hidden"] is False
     assert b.get("/api/products/suggest", params={"q": "tulsi"}).json()["library"]  # found by its new names
 
     claude.names = {**claude.names, "is_nursery_item": False, "hindi_name": "", "hinglish": [], "aliases": []}
     q = a.post("/api/products", {"name": "Dell Laptop Stand", "selling_price": 900}).json()
-    asyncio.run(library.enrich(db, q["library_id"]))
+    run(library.enrich(db, q["library_id"]))
     assert b.get("/api/products/suggest", params={"q": "dell laptop"}).json()["library"] == []  # hidden from other shops
     assert a.get("/api/products/suggest", params={"q": "dell laptop"}).json()["own"]
