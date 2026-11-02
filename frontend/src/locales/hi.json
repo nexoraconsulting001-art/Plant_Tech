@@ -769,5 +769,10 @@
   "This customer's details have been erased.": "इस ग्राहक की जानकारी मिटा दी गई है।",
   "This photo is too large. Please take it again with the phone camera.": "यह फ़ोटो बहुत बड़ी है। कृपया फ़ोन के कैमरे से दोबारा लें।",
   "Photo recognition is paused for now. Please search by name, or enter the items manually.": "फ़ोटो पहचान अभी रुकी हुई है। कृपया नाम से खोजें, या सामान ख़ुद लिखें।",
-  "This bill is too long to read in one go. Please scan fewer pages at a time, or enter the items manually.": "यह बिल एक बार में पढ़ने के लिए बहुत लंबा है। कृपया एक बार में कम पेज स्कैन करें, या सामान ख़ुद लिखें।"
+  "This bill is too long to read in one go. Please scan fewer pages at a time, or enter the items manually.": "यह बिल एक बार में पढ़ने के लिए बहुत लंबा है। कृपया एक बार में कम पेज स्कैन करें, या सामान ख़ुद लिखें।",
+  "Your shop has used its {{limit}} MB of photo storage. Please contact support to add more.": "आपकी दुकान ने फ़ोटो के लिए अपनी {{limit}} MB जगह इस्तेमाल कर ली है। और जगह के लिए कृपया सपोर्ट से संपर्क करें।",
+  "Direct upload is not available. Please send the photo the usual way.": "सीधा अपलोड उपलब्ध नहीं है। कृपया फ़ोटो सामान्य तरीके से भेजें।",
+  "Upload not found. Please start again.": "अपलोड नहीं मिला। कृपया दोबारा शुरू करें।",
+  "This photo is still being saved. Please wait a moment.": "यह फ़ोटो अभी सेव हो रही है। कृपया थोड़ा रुकें।",
+  "The photo did not reach the server. Please try again.": "फ़ोटो सर्वर तक नहीं पहुँची। कृपया फिर कोशिश करें।"
 }
