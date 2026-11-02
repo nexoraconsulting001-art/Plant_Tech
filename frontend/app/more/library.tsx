@@ -11,7 +11,7 @@ import { apiDelete, apiGet, apiPatch, apiPost, fileUrl } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { Sheet } from "@/src/components/sheet";
 import { useToast } from "@/src/components/toast";
-import { Badge, Button, Chip, EmptyState, ErrorView, Field, Header, Icon, LoadingView, Screen, SearchBox, T } from "@/src/components/ui";
+import { Badge, Button, Chip, EmptyState, ErrorView, Field, Header, Icon, LoadingView, Screen, SearchBox, T, thumbUrl } from "@/src/components/ui";
 import { pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
 import { colors, radius, spacing } from "@/src/theme";
 import type { LibraryEntry } from "@/src/types";
@@ -24,11 +24,13 @@ function StatusBadge({ e }: { e: LibraryEntry }) {
     : e.image_status === "live" ? <Badge text={t("Checked")} tone="green" /> : <Badge text={t("No picture")} tone="grey" />;
 }
 
+// In the grid (half the screen) the small copy of the photo; in the sheet the photo itself, to check it properly.
 function Picture({ path, size }: { path: string | null; size: number | "100%" }) {
+  const uri = size === "100%" ? thumbUrl(path) : fileUrl(path);
   return (
     <View style={{ width: size, aspectRatio: 1, borderRadius: radius.md, overflow: "hidden", backgroundColor: colors.greenTint,
       alignItems: "center", justifyContent: "center" }}>
-      {path ? <Image source={{ uri: fileUrl(path) }} style={{ width: "100%", height: "100%" }} contentFit="cover" />
+      {uri ? <Image source={{ uri }} recyclingKey={uri} cachePolicy="memory-disk" style={{ width: "100%", height: "100%" }} contentFit="cover" />
         : <Icon name="sprout" size={48} color={colors.greenMid} />}
     </View>
   );

@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useState } from "react";
 import {
   ActivityIndicator,
+  PixelRatio,
   Pressable,
   StyleProp,
   StyleSheet,
@@ -323,13 +324,32 @@ export function Card({ children, onPress, style, testID }: {
   );
 }
 
-export function Thumb({ path, size = 56, tint = colors.greenTint, icon = "sprout", contain }: {
-  path?: string | null; size?: number; tint?: string; icon?: IconName; contain?: boolean; // contain: show all of it (logos)
+// Every photo also has a small copy on the server (GET /api/files/<path>?w=256; a server without them sends the
+// photo). Lists show that copy: a list row's picture is ~170 px on a sharp phone, the photo up to 1568 px.
+export const THUMB_PX = 256;
+
+// The small picture: the thumbnail the server named (`thumb_path`), else the photo's small copy.
+export function thumbUrl(path?: string | null, thumbPath?: string | null): string | undefined {
+  if (thumbPath) return fileUrl(thumbPath);
+  const url = fileUrl(path);
+  return url && `${url}?w=${THUMB_PX}`;
+}
+
+// A picture shown `size` points wide: the small one while that is sharp enough on this screen, else the photo.
+export function pictureUrl(path?: string | null, size = 56, thumbPath?: string | null): string | undefined {
+  return size * PixelRatio.get() > THUMB_PX * 1.25 ? fileUrl(path || thumbPath) : thumbUrl(path, thumbPath);
+}
+
+export function Thumb({ path, thumbPath, size = 56, tint = colors.greenTint, icon = "sprout", contain }: {
+  path?: string | null; thumbPath?: string | null; size?: number; tint?: string; icon?: IconName; contain?: boolean; // contain: show all of it (logos)
 }) {
   const { t } = useTranslation();
+  const uri = pictureUrl(path, size, thumbPath);
   return (
     <View style={{ width: size, height: size, borderRadius: size * 0.24, overflow: "hidden", backgroundColor: tint, alignItems: "center", justifyContent: "center" }}>
-      {path ? <Image source={{ uri: fileUrl(path) }} style={{ width: "100%", height: "100%" }} contentFit={contain ? "contain" : "cover"} accessibilityLabel={contain ? t("Shop logo") : t("Product picture")} />
+      {/* recyclingKey: a list reuses this view for another row, which must not show the last row's picture while loading */}
+      {uri ? <Image source={{ uri }} recyclingKey={uri} cachePolicy="memory-disk" style={{ width: "100%", height: "100%" }}
+        contentFit={contain ? "contain" : "cover"} accessibilityLabel={contain ? t("Shop logo") : t("Product picture")} />
         : <Icon name={icon} size={size * 0.5} color={colors.greenMid} />}
     </View>
   );
