@@ -133,7 +133,7 @@ def test_editing_a_customer_updates_the_search(client):
 
 
 def test_customers_saved_without_search_fields_are_found(client):
-    """A bill for a new number (sales.py) and the demo data save customers without the search fields."""
+    """Customers saved before the search fields existed (older bills, older demo data) are filled in and found."""
     shop = Shop(client)
     r = shop.post("/api/invoices", {"items": [{"product_id": None, "name": "Rose", "quantity": 1, "price": 100}],
                                     "customer_phone": "9811100066", "customer_name": "Kavita Rao"})
@@ -191,20 +191,17 @@ def test_many_phones_adding_one_number_at_once_make_one_customer(client):
     Shop(client)
     db = db_module.state.db
     owner = run(db.users.find_one({"phone": "+919811122334"}, {"_id": 0}))
-    # the unique index that comes with sales.py's customer upsert (WP-1); made here so the database decides the race
-    run(db.customers.create_index([("business_id", 1), ("phone", 1)], unique=True, name="test_one_phone",
-                                  partialFilterExpression={"phone": {"$gt": ""}}))
-    try:
-        body = customers.CustomerIn(name="Meena", phone="9811100066")
+    # the database decides the race through the unique {business_id, phone} index (migration 0102, WP-1)
+    assert any(ix.get("unique") and [k for k, _ in ix["key"]] == ["business_id", "phone"]
+               for ix in run(db.customers.index_information()).values())
+    body = customers.CustomerIn(name="Meena", phone="9811100066")
 
-        async def together():
-            return await asyncio.gather(*(customers.create_customer(body, owner) for _ in range(8)))
+    async def together():
+        return await asyncio.gather(*(customers.create_customer(body, owner) for _ in range(8)))
 
-        made = run(together())
-        assert len({c["id"] for c in made}) == 1 and sum(not c["existing"] for c in made) == 1
-        assert run(db.customers.count_documents({"phone": "+919811100066"})) == 1
-    finally:
-        run(db.customers.drop_index("test_one_phone"))
+    made = run(together())
+    assert len({c["id"] for c in made}) == 1 and sum(not c["existing"] for c in made) == 1
+    assert run(db.customers.count_documents({"phone": "+919811100066"})) == 1
 
 
 def test_erase_customer(client):
@@ -260,14 +257,14 @@ def test_erase_customer(client):
 
 def test_no_unanchored_regex():
     """Every $regex in the server starts with ^: a pattern matched anywhere in a value can't use an index."""
-    pending = {"routers/sales.py"}  # the bill search, which WP-1 rewrites
+    pending = {"routers/sales.py"}  # the Orders bill search (within one shop's bills): still to be rewritten
     bad = []
     for path in BACKEND.rglob("*.py"):
         rel = path.relative_to(BACKEND).as_posix()
         if rel.startswith("tests/") or rel in pending:
             continue
         for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if re.search(r"""["']\$regex["']""", line) and not re.search(r"""\$regex["']\s*:\s*(f?["']\^|["']\^["']\s*\+)""", line):
+            if re.search(r"""["']\$regex["']""", line) and not re.search(r"""\$regex["']\s*:\s*([rf]{0,2}["']\^|["']\^["']\s*\+)""", line):
                 bad.append(f"{rel}:{no}: {line.strip()}")
     assert not bad, "unanchored $regex:\n" + "\n".join(bad)
 

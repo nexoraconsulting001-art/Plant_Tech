@@ -50,7 +50,7 @@ import storage_client
 from common import date_key, money, new_id, normalize_in_phone, now_iso
 from db import get_db, in_transaction
 from errors import AppError
-from routers import carts
+from routers import carts, customers
 from routers.business import shop_upis
 from routers.products import context
 from settings import get_settings
@@ -194,7 +194,7 @@ async def _prepare(db, user: dict, body: InvoiceIn) -> _Bill:
                 raise HTTPException(400, "Please enter the customer's name.")
             new_customer = {"id": new_id(), "business_id": bid, "name": body.customer_name.strip(), "phone": phone,
                             "email": "", "address": "", "notes": "", "total_purchases": 0.0, "purchase_count": 0,
-                            "created_at": now_iso()}
+                            "created_at": now_iso(), **customers.search_fields(body.customer_name.strip(), phone)}
     # "Bill without GST" stays as it is until the owner decides (D6); BILL_WITHOUT_GST=0 turns it off for everyone.
     gst_removed = body.gst_removed and get_settings().bill_without_gst and gst_registered and auth.can(user, "owner")
     return _Bill(cats=cats, gst_registered=gst_registered, gst_removed=gst_removed,
