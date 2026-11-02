@@ -7,7 +7,7 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
 **Hara Hisaab (हरा हिसाब)**, formerly NurseryPOS, is a multi-tenant point-of-sale app for plant nurseries.
 - **App:** Expo SDK 57 (`frontend/`), version **1.1.0** (versionCode 2) since this session.
 - **Backend:** FastAPI and MongoDB (`backend/`) on the shared Oracle VM behind Caddy.
-- **Repo:** `Shashank-Codes-bit/Plant_Tech` (git remote `plant_tech`; `origin` is the old udyanojha/Nzone).
+- **Repo:** `nexoraconsulting001-art/Plant_Tech` (moved from `Shashank-Codes-bit/Plant_Tech`; git remote `plant_tech`; `origin` is the old udyanojha/Nzone).
 - **Branches:** `staging` deploys to https://nurserypos-staging.140-238-251-141.sslip.io (port 8130, `~/Plant_Tech-staging`). Prod uses port 8120.
 - **Deploy:** pushing `staging` runs the GitHub Actions deploy. It is live when the new endpoints appear in `/openapi.json`.
   - From Claude's sandbox the VM is only reachable through PowerShell (`Invoke-WebRequest`, TLS 1.2); Bash `curl`/`ssh` time out.
@@ -54,6 +54,8 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
 **Checked in the local browser:** onboarding race (slow network), laptop / bill / not-a-bill alerts, similar products on a new item, Bill without GST through to the printed bill, profit field and suggestion, crop screen (square and free, drag, Use photo), two-page bill → new supplier → Suppliers detail, chips fitting at 360 px, Hindi/Hinglish search.
 
 **Owner's browser test:** passed on 18 Oct ("looks good"); the 1.1.0 QA APK was built the same day.
+
+**Roadmap (2 Nov):** open issues first, then iOS live, then production and scale. See `docs/ROADMAP.md`; pricing tiers in `docs/TIERS-PLAN.md`.
 
 ## Open items for next session
 1. **Phone checks on the 1.1.0 QA APK** (the owner is installing it): QA sections O (crop: dragging, photos taken sideways come out upright, back button), I.11–I.13 (bottom buttons, sheets, keyboard), M.6–M.11 (bill pages taken one after another with the camera), S (suppliers) and T (Hindi; especially T.7, no clipped vowel marks at the largest font). Fix whatever the owner reports.
