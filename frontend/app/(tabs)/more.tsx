@@ -1,4 +1,4 @@
-// Owner: More (reports, staff, shop, categories, supplier bill, shared pictures).
+// Owner: More (reports, staff, shop, notifications, categories, supplier bill, shared pictures).
 // Worker: Me (what the owner lets them do, change PIN, log out).
 import { useState } from "react";
 import { ScrollView, View } from "react-native";
@@ -71,6 +71,8 @@ export default function More() {
               onPress={() => router.push("/more/staff")} />
             <Row title={t("Shop details")} subtitle={t("Name, address, UPI, GST")} left={<MenuIcon name="store" />} chevron
               onPress={() => router.push("/more/shop")} testID="more-shop" />
+            <Row title={t("Notifications")} subtitle={t("Low stock and the daily sales summary")} left={<MenuIcon name="bell-outline" />} chevron
+              onPress={() => router.push("/more/notifications")} testID="more-notifications" />
             <Row title={t("Categories")} subtitle={t("Names and GST rates")} left={<MenuIcon name="shape" />} chevron
               onPress={() => router.push("/more/categories")} testID="more-categories" />
             <Row title={t("Supplier bill")} subtitle={t("Add stock from a supplier bill")} chevron testID="more-supplier"

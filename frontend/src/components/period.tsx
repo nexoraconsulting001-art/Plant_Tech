@@ -12,10 +12,11 @@ import { colors, radius, touch, spacing } from "@/src/theme";
 
 export type PeriodKind = "day" | "week" | "month";
 
-export function usePeriod(initial: PeriodKind = "day") {
+// `from`: a day to open on (e.g. the day of a summary notification); today when missing or in the future.
+export function usePeriod(initial: PeriodKind = "day", from?: string) {
   const today = todayKey();
   const [kind, setKind] = useState<PeriodKind>(initial);
-  const [anchor, setAnchor] = useState(today);
+  const [anchor, setAnchor] = useState(from && /^\d{4}-\d{2}-\d{2}$/.test(from) && from <= today ? from : today);
   const start = kind === "day" ? anchor : kind === "week" ? mondayOf(anchor) : monthStart(anchor);
   const end = kind === "day" ? anchor : kind === "week" ? addDays(start, 6) : addDays(addMonths(start, 1), -1);
   return { kind, setKind, anchor, setAnchor, today, start, end, key: `${kind}:${start}` };

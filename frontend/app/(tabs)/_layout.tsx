@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "@/src/auth";
 import { Icon, IconName } from "@/src/components/ui";
 import { takePendingOpen } from "@/src/nav";
+import { syncPush, usePushTaps } from "@/src/push";
 import { colors, fonts, spacing } from "@/src/theme";
 
 const icon = (name: IconName) => function TabIcon({ color }: { color: ColorValue }) {
@@ -16,7 +17,7 @@ const icon = (name: IconName) => function TabIcon({ color }: { color: ColorValue
 };
 
 export default function TabsLayout() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { ready, user, isOwner, can } = useAuth();
@@ -27,6 +28,12 @@ export default function TabsLayout() {
     const next = takePendingOpen(); // e.g. Add product, asked for on the last setup screen
     if (next) router.push(next);
   }, [showing, router]);
+
+  // Phone notifications (owners only): sign this phone up after login and when the language changes.
+  useEffect(() => {
+    if (showing) syncPush(isOwner);
+  }, [showing, isOwner, user?.id, i18n.language]);
+  usePushTaps(showing && isOwner);
 
   if (!ready) return null;
   if (!user) return <Redirect href="/welcome" />;

@@ -1,7 +1,8 @@
 // Products: search plus Category, Stock and Sort filters. A product stays here at 0 stock
 // (marked Out of stock) until the owner deletes it. Search runs on the server, so Hindi, Hinglish and
 // English names all find a product ("गुलाब", "gulab", "rose"). Stock below zero (sold without enough
-// stock, owner only) shows in red and has its own filter; Home's "Sold below stock" opens it (?stock=below).
+// stock, owner only) shows in red and has its own filter. Home's cards and the low-stock notification open a filter
+// (?stock=below / low / out).
 import { useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -30,9 +31,9 @@ export default function Products() {
   const [category, setCategory] = useState("");
   const [stock, setStock] = useState<StockFilter>("");
   const [openedAt, setOpenedAt] = useState<string | undefined>(undefined); // the Home tap already applied
-  if (asked === "below" && at !== openedAt) {
+  if ((asked === "below" || asked === "low" || asked === "out") && at !== openedAt) {
     setOpenedAt(at);
-    setStock("below");
+    setStock(asked);
   }
   const [sort, setSort] = useState<Sort>("name");
   const [sheet, setSheet] = useState<"" | "category" | "stock" | "sort">("");

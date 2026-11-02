@@ -68,7 +68,15 @@
       "expo-image",
       "expo-secure-store",
       "expo-web-browser",
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/adaptive-icon-monochrome.png",
+          "color": "#1B5E3B",
+          "defaultChannel": "alerts"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

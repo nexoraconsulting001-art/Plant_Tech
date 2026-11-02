@@ -1,7 +1,8 @@
 // Home: the shop (its logo, or ours when it has none), New order, and today's numbers. Saved orders are not
 // shown here: a customer's saved items come back when they are picked in New order.
 // The owner sees the whole shop's day; a worker sees their own sales.
-// The owner also sees "Sold below stock": products whose stock went below zero, to count and correct.
+// The owner also sees "Sold below stock": products whose stock went below zero, to count and correct, and
+// "Low stock": products at or below their low-stock alert level, plus how many are out of stock.
 import { Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
@@ -18,9 +19,11 @@ import { useRefreshOnFocus } from "@/src/hooks/useRefreshOnFocus";
 import { colors, radius, spacing } from "@/src/theme";
 
 type Below = { id: string; name: string; stock: number; unit: string };
+type Low = Below & { min_stock: number };
 type Today = {
   scope: "shop" | "mine"; sales: number; orders: number; by_method: Record<"Cash" | "UPI" | "Card", number>; recent: OrderSummary[];
   below_zero?: Below[]; below_zero_count?: number; // owner only
+  low_stock?: Low[]; low_stock_count?: number; out_of_stock_count?: number; // owner only (servers before this: missing)
 };
 
 export default function Home() {
@@ -114,6 +117,10 @@ export default function Home() {
 
         {isOwner && !!d?.below_zero?.length && <BelowZero items={d.below_zero} count={d.below_zero_count ?? d.below_zero.length} />}
 
+        {isOwner && !!(d?.low_stock_count || d?.out_of_stock_count) && (
+          <LowStock items={d.low_stock ?? []} count={d.low_stock_count ?? 0} out={d.out_of_stock_count ?? 0} />
+        )}
+
         {d && (
           <View style={{ gap: spacing.sm }}>
             <SectionTitle right={d.recent.length ? (
@@ -160,6 +167,48 @@ function BelowZero({ items, count }: { items: Below[]; count: number }) {
           </Pressable>
         ))}
       </View>
+    </Card>
+  );
+}
+
+// Products at or below their low-stock alert level (the Products tab's Low filter), lowest first, and how many
+// are out of stock (its Out filter). The owner also gets these as phone notifications (More → Notifications).
+function LowStock({ items, count, out }: { items: Low[]; count: number; out: number }) {
+  const { t } = useTranslation();
+  const router = useRouter();
+  const shown = items.slice(0, 5);
+  const openFilter = (stock: "low" | "out") => router.push({ pathname: "/(tabs)/products", params: { stock, at: String(Date.now()) } });
+  return (
+    <Card style={{ gap: spacing.sm }} testID="home-low-stock">
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+        <Icon name="package-variant" size={22} color={colors.amber} />
+        <T v="bold" style={{ flex: 1 }}>{t("Low stock")}</T>
+        {count > shown.length && (
+          <Pressable onPress={() => openFilter("low")} hitSlop={8} style={{ minHeight: 44, justifyContent: "center" }} testID="home-low-all">
+            <T v="bold" color={colors.green}>{t("See all {{n}}", { n: count })}</T>
+          </Pressable>
+        )}
+      </View>
+      {!!shown.length && (
+        <View style={{ borderRadius: radius.md, backgroundColor: colors.page, paddingHorizontal: spacing.lg }}>
+          {shown.map((p, i) => (
+            <Pressable key={p.id} testID={`home-low-${p.name}`} onPress={() => router.push({ pathname: "/products/[id]", params: { id: p.id } })}
+              style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 48, borderTopWidth: i ? 1 : 0, borderTopColor: colors.line }}>
+              <T v="bold" style={{ flex: 1 }}>{p.name}</T>
+              <T v="number" color={colors.amber}>{formatQtyUnit(p.stock, p.unit)}</T>
+              <Icon name="chevron-right" size={22} color={colors.muted} />
+            </Pressable>
+          ))}
+        </View>
+      )}
+      {out > 0 && (
+        <Pressable onPress={() => openFilter("out")} testID="home-out-of-stock"
+          style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 48 }}>
+          <Icon name="close-circle-outline" size={22} color={colors.red} />
+          <T v="bold" style={{ flex: 1 }}>{out === 1 ? t("1 product is out of stock") : t("{{n}} products are out of stock", { n: out })}</T>
+          <Icon name="chevron-right" size={22} color={colors.muted} />
+        </Pressable>
+      )}
     </Card>
   );
 }

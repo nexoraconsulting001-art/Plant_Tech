@@ -536,7 +536,7 @@ async def public_bill(token: str):
 @router.get("/dashboard/today")
 async def today(user: dict = Depends(auth.require("sell"))):
     """Home screen: today's sales and orders. Workers see only their own.
-    The owner also gets `below_zero`: products sold below their stock count, most short first."""
+    The owner also gets `below_zero`: products sold below their stock count, most short first, and `low_stock`."""
     db = get_db()
     invs = await db.invoices.find({**_scope(user), **LIVE, "date_key": date_key()},
                                   {"_id": 0}).sort("created_at", -1).to_list(5000)
@@ -551,7 +551,19 @@ async def today(user: dict = Depends(auth.require("sell"))):
         below = await db.products.find(q, {"_id": 0, "id": 1, "name": 1, "stock": 1, "unit": 1}).sort("stock", 1).to_list(20)
         out["below_zero"] = [{**p, "unit": unit_of(p.get("unit"))} for p in below]
         out["below_zero_count"] = await db.products.count_documents(q)
+        out.update(await _low_stock(db, user["business_id"]))
     return out
+
+
+async def _low_stock(db, business_id: str) -> dict:
+    """Home's "Low stock" card: products above zero but at or below their alert level (the Products tab's Low
+    filter), lowest first, and how many are out of stock (its Out filter, which includes below zero)."""
+    rows = await db.products.find({"business_id": business_id, "deleted_at": None},
+                                  {"_id": 0, "id": 1, "name": 1, "stock": 1, "min_stock": 1, "unit": 1}).to_list(10000)
+    low = sorted((p for p in rows if 0 < p.get("stock", 0) <= p.get("min_stock", 0)),
+                 key=lambda p: (p["stock"], p["name"].lower()))
+    return {"low_stock": [{**p, "unit": unit_of(p.get("unit"))} for p in low[:20]], "low_stock_count": len(low),
+            "out_of_stock_count": sum(1 for p in rows if p.get("stock", 0) <= 0)}
 
 
 def _report_buckets(range_: str, anchor: date) -> tuple[list[str], list[str], callable]:

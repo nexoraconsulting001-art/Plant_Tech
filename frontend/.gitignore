@@ -38,3 +38,7 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+
+# Firebase config for phone notifications (docs/PUSH-SETUP.md); upload it to EAS instead
+google-services*.json
+GoogleService-Info*.plist

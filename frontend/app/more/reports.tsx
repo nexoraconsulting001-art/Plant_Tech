@@ -2,6 +2,7 @@
 // how customers paid, and every item sold. ◀ ▶ step through periods; tapping the date opens a picker.
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
@@ -19,7 +20,8 @@ type Report = {
 
 export default function Reports() {
   const { t } = useTranslation();
-  const p = usePeriod("day");
+  const { date } = useLocalSearchParams<{ date?: string }>(); // from the daily summary notification
+  const p = usePeriod("day", date);
   const q = useQuery<Report>({ queryKey: ["report", p.kind, p.anchor], queryFn: () => apiGet(`/reports/sales?range=${p.kind}&date=${p.anchor}`) });
   const r = q.data;
 

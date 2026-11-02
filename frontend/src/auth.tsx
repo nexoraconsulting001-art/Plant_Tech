@@ -2,6 +2,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { apiGet, apiPost, setApiToken, setOnUnauthorized } from "@/src/api";
+import { unregisterPush } from "@/src/push";
 import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
 
@@ -45,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
   const logout = useCallback(async () => {
+    await unregisterPush(); // this phone stops getting the owner's notifications (sent while still logged in)
     setApiToken(null);
     setUser(null);
     queryClient.clear();
