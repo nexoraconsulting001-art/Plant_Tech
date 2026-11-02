@@ -766,5 +766,8 @@
   "Another catalogue item already has this name.": "कैटलॉग में इस नाम का दूसरा सामान पहले से है।",
   "Please refresh the list.": "कृपया लिस्ट रीफ़्रेश करें।",
   "This list has changed. Please refresh it.": "यह सूची बदल गई है। कृपया इसे फिर से खोलें।",
-  "This customer's details have been erased.": "इस ग्राहक की जानकारी मिटा दी गई है।"
+  "This customer's details have been erased.": "इस ग्राहक की जानकारी मिटा दी गई है।",
+  "This photo is too large. Please take it again with the phone camera.": "यह फ़ोटो बहुत बड़ी है। कृपया फ़ोन के कैमरे से दोबारा लें।",
+  "Photo recognition is paused for now. Please search by name, or enter the items manually.": "फ़ोटो पहचान अभी रुकी हुई है। कृपया नाम से खोजें, या सामान ख़ुद लिखें।",
+  "This bill is too long to read in one go. Please scan fewer pages at a time, or enter the items manually.": "यह बिल एक बार में पढ़ने के लिए बहुत लंबा है। कृपया एक बार में कम पेज स्कैन करें, या सामान ख़ुद लिखें।"
 }
