@@ -38,6 +38,7 @@ export type Invoice = {
   gst_breakup: { rate: number; taxable: number; tax: number }[]; gst_total: number;
   payment_method: "Cash" | "UPI" | "Card"; customer_id: string | null; customer_name: string; customer_phone: string;
   customer_address?: string; // as it was when billed; none on bills made before addresses were kept
+  upi_id?: string; // UPI bills: the shop's UPI ID it was paid to
   shop?: { name: string; address: string; phone: string }; // the shop today (single bill only)
   created_by: { id: string; name: string }; created_at: string;
 };
@@ -62,7 +63,11 @@ export type Business = {
   id: string; name: string; address: string; phone: string; gst_registered: boolean; gstin: string;
   upi_id: string; logo_path: string | null; footer_note: string; onboarding_done: boolean;
   profit_percent?: number; // markup on cost for new products (60 when never set)
+  upi_ids?: UpiEntry[]; default_upi?: string | null; // upi_id is the default's (all a server before the list sends)
+  whatsapp_bill?: boolean; // open WhatsApp with the bill as soon as it is made (on when missing)
 };
+
+export type UpiEntry = { id: string; upi_id: string; label: string };
 
 export type Worker = {
   id: string; name: string; phone: string; active: boolean;

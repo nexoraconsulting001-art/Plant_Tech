@@ -1,24 +1,27 @@
 // Payment: who is paying (the order's customer) and how. Cash and Card make the bill straight away;
-// UPI first shows the shop's pay QR.
+// UPI first shows the shop's pay QR (when the shop has a UPI ID; the settings are fetched first if not loaded yet,
+// so a quick tap never bills UPI without the QR).
 // The stock of the order's products is checked again here. Not enough: the owner sees what each stock will go
 // to and confirms before billing; an employee is asked to change the order or get the stock updated.
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { Redirect, useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { apiGet } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { businessQuery, upiList, useBusiness } from "@/src/business";
 import { isLoose, useCart } from "@/src/cart-context";
 import { confirm, notice } from "@/src/confirm";
 import { OrderCustomerBar } from "@/src/components/order-customer";
+import { useToast } from "@/src/components/toast";
 import { Button, Header, Icon, IconName, Screen, T } from "@/src/components/ui";
 import { formatCurrency, plural } from "@/src/format";
 import { PaymentMethod, useCreateBill } from "@/src/order";
 import { askOwner, shortWarning } from "@/src/stock";
 import { colors, radius, spacing } from "@/src/theme";
-import type { Business, Product } from "@/src/types";
+import type { Product } from "@/src/types";
 
 const METHODS: { m: PaymentMethod; icon: IconName }[] = [
   { m: "Cash", icon: "cash" },
@@ -34,7 +37,10 @@ export default function OrderPay() {
   const [openedWithout] = useState(() => !cart.customer);
   const bill = useCreateBill();
   const { isOwner } = useAuth();
-  const biz = useQuery<Business>({ queryKey: ["business"], queryFn: () => apiGet("/business") });
+  const qc = useQueryClient();
+  const toast = useToast();
+  const biz = useBusiness();
+  const [checking, setChecking] = useState(false); // reading the shop's UPI IDs before opening the QR
   // how much of each product this order takes, against its stock right now
   const want = new Map<string, number>();
   for (const i of cart.items) if (!isLoose(i.product_id)) want.set(i.product_id, (want.get(i.product_id) ?? 0) + i.quantity);
@@ -53,9 +59,23 @@ export default function OrderPay() {
     }
     if (short.length && !(await confirm(t("Sell below stock?"), `${short.join("\n")}\n\n${t("Bill anyway? The stock will go below zero.")}`,
       t("Bill anyway")))) return;
-    if (m === "UPI" && biz.data?.upi_id) {
-      router.push({ pathname: "/order/upi", params: short.length ? { short: "1" } : {} });
-      return;
+    if (m === "UPI") {
+      let b = biz.data;
+      if (!b) {
+        setChecking(true);
+        try {
+          b = await qc.fetchQuery(businessQuery);
+        } catch (e: any) {
+          toast.show(e.message, "error");
+          return;
+        } finally {
+          setChecking(false);
+        }
+      }
+      if (upiList(b).length) {
+        router.push({ pathname: "/order/upi", params: short.length ? { short: "1" } : {} });
+        return;
+      }
     }
     bill.create(m, short.length > 0);
   }
@@ -97,10 +117,10 @@ export default function OrderPay() {
           <T v="label">{t("How is the customer paying?")}</T>
           <View style={{ flexDirection: "row", gap: spacing.md }}>
             {METHODS.map(({ m, icon }) => (
-              <Pressable key={m} testID={`pay-${m}`} disabled={bill.busy || !cart.customer} onPress={() => pay(m)}
+              <Pressable key={m} testID={`pay-${m}`} disabled={bill.busy || checking || !cart.customer} onPress={() => pay(m)}
                 style={({ pressed }) => ({ flex: 1, alignItems: "center", justifyContent: "center", gap: 6, minHeight: 112, borderRadius: radius.lg,
                   borderWidth: 2, borderColor: colors.green, backgroundColor: pressed ? colors.greenTint : colors.surface,
-                  opacity: bill.busy ? 0.5 : 1 })}>
+                  opacity: bill.busy || checking ? 0.5 : 1 })}>
                 <Icon name={icon} size={40} color={colors.green} />
                 <T v="bodyLarge" color={colors.greenDark}>{t(m)}</T>
               </Pressable>

@@ -93,6 +93,7 @@ def render(inv: dict, biz: dict, *, public: bool = True, logo_src: str | None = 
     customer = e(inv.get("customer_name") or "Walk-in customer")
     phone = f'<div class="m">{e(inv["customer_phone"])}</div>' if inv.get("customer_phone") else ""
     address = f'<div class="m addr">{e(inv["customer_address"])}</div>' if inv.get("customer_address") else ""
+    paid_to = f'<div class="m">Paid to UPI ID {e(inv["upi_id"])}</div>' if inv.get("upi_id") else ""
     footer = e(biz.get("footer_note") or "Thank you, visit again!")
     button = ('<button class="dl" onclick="window.print()">Download / Print PDF</button>' if public else "")
     logo = f'<img class="logo" src="{e(logo_src)}" alt="">' if logo_src else ""
@@ -141,6 +142,6 @@ tr.z td {{ background: #F5F8F5; }}
 <tbody>{"".join(rows)}</tbody></table>
 <div class="tot">{"".join(totals)}
 <div class="grand"><span>Total</span><span>{inr(inv.get("grand_total", 0))}</span></div>
-<div class="words">{amount_in_words(inv.get("grand_total", 0))}</div>
+<div class="words">{amount_in_words(inv.get("grand_total", 0))}</div>{paid_to}
 <div class="foot"><span class="paid">PAID · {e(inv.get("payment_method"))}</span><span class="m">{footer}</span></div>
 </div></article>{button}<div class="brand">Made with Hara Hisaab · हरा हिसाब</div></div></body></html>"""

@@ -1,4 +1,5 @@
-// Shop details printed on every bill: name, logo, address, phone, UPI, GST.
+// Shop details printed on every bill: name, logo, address, phone, GST. Also the shop's UPI IDs for the pay QR
+// (one is the default) and whether bills open in WhatsApp by themselves.
 import { useState } from "react";
 import { View } from "react-native";
 import { useRouter } from "expo-router";
@@ -8,12 +9,14 @@ import { useTranslation } from "react-i18next";
 
 import { apiGet, apiPut, uploadImage } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { newUpiKey } from "@/src/business";
 import { useToast } from "@/src/components/toast";
+import { UpiEditor } from "@/src/components/upi-editor";
 import { BottomBar, Button, Field, Header, LoadingView, PhoneField, Screen, T, Thumb, Toggle } from "@/src/components/ui";
 import { normalizePhone } from "@/src/format";
 import { pickFromGallery } from "@/src/hooks/useImageCapture";
 import { colors, radius, spacing } from "@/src/theme";
-import type { Business } from "@/src/types";
+import type { Business, UpiEntry } from "@/src/types";
 
 const GSTIN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/;
 
@@ -33,6 +36,11 @@ function ShopForm({ initial }: { initial: Business }) {
   const [b, setB] = useState<Business>(initial);
   const [phone, setPhone] = useState(normalizePhone(initial.phone || "") ?? "");
   const [profit, setProfit] = useState(String(initial.profit_percent ?? 60));
+  const [upis, setUpis] = useState<{ list: UpiEntry[]; def: string | null }>(() => {
+    const list = initial.upi_ids ?? (initial.upi_id ? [{ id: newUpiKey(), upi_id: initial.upi_id, label: "" }] : []);
+    return { list, def: initial.default_upi ?? list[0]?.id ?? null };
+  });
+  const [whatsapp, setWhatsapp] = useState(initial.whatsapp_bill !== false);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const set = (patch: Partial<Business>) => setB((o) => ({ ...o, ...patch }));
@@ -56,8 +64,8 @@ function ShopForm({ initial }: { initial: Business }) {
   async function save() {
     setBusy(true);
     try {
-      await apiPut("/business", { name: b.name.trim(), address: b.address, phone: phone ? `+91${phone}` : "", upi_id: b.upi_id.trim(),
-        gst_registered: b.gst_registered, gstin: b.gst_registered ? b.gstin : "", logo_path: b.logo_path, footer_note: b.footer_note,
+      await apiPut("/business", { name: b.name.trim(), address: b.address, phone: phone ? `+91${phone}` : "",
+        upi_ids: upis.list, default_upi: upis.def, whatsapp_bill: whatsapp, gst_registered: b.gst_registered, gstin: b.gst_registered ? b.gstin : "", logo_path: b.logo_path, footer_note: b.footer_note,
         profit_percent: Number(profit) });
       await Promise.all([refresh(), qc.invalidateQueries()]);
       toast.show(t("Saved"), "success");
@@ -81,8 +89,11 @@ function ShopForm({ initial }: { initial: Business }) {
         <Field label={t("Shop name (printed on every bill)")} value={b.name} onChangeText={(name) => set({ name })} autoCapitalize="words" testID="shop-name" />
         <Field label={t("Shop address")} value={b.address} onChangeText={(address) => set({ address })} multiline />
         <PhoneField label={t("Shop phone")} value={phone} onChangeText={setPhone} error={phoneBad && phone.length === 10 ? t("Enter a 10-digit mobile number") : undefined} />
-        <Field label={t("UPI ID (shows a payment QR code to customers)")} value={b.upi_id} onChangeText={(upi_id) => set({ upi_id })} autoCapitalize="none"
-          placeholder="shopname@okaxis" testID="shop-upi" />
+        <UpiEditor list={upis.list} defaultId={upis.def} onChange={(list, def) => setUpis({ list, def })} />
+        <View style={{ padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.page }}>
+          <Toggle title={t("Send bill on WhatsApp")} value={whatsapp} onChange={setWhatsapp} testID="shop-whatsapp"
+            subtitle={whatsapp ? t("WhatsApp opens with the bill as soon as it is made.") : t("Off: send it from the bill only when the customer asks.")} />
+        </View>
         <View style={{ gap: spacing.md, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.page }}>
           <Toggle title={t("GST registered")} subtitle={t("Turn on to show GST on your bills. Leave off if your shop is not registered.")} value={b.gst_registered}
             onChange={(gst_registered) => set({ gst_registered })} testID="shop-gst" />

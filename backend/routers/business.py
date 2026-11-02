@@ -2,7 +2,14 @@
 
 Prices are typed tax-inclusive. GST only applies when the shop is GST registered; then each
 category's GST % decides how much of a line's price is tax.
+
+UPI: a shop can have several UPI IDs (`upi_ids`, each {id, upi_id, label}); `default_upi` is the id of the one the
+pay QR starts with. `upi_id` stays the default's UPI ID for app versions that know only one, and their PUT with
+`upi_id` changes (or, when empty, removes) the default. Shops saved before the list get it on first read.
+`whatsapp_bill` (on unless the owner turned it off): the app opens WhatsApp with the bill as soon as it is made.
 """
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -23,6 +30,15 @@ SUGGESTED_CATEGORIES = [
 GST_SLABS = (0, 0.25, 3, 5, 12, 18, 28, 40)
 # New products from a supplier bill are priced at cost plus this, unless the owner set their own %.
 DEFAULT_PROFIT_PERCENT = 60
+# name@bank, e.g. greenhouse@okaxis or 9811122334@ybl
+UPI_RE = re.compile(r"^[a-zA-Z0-9._-]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$")
+MAX_UPI_IDS = 10
+
+
+class UpiIn(BaseModel):
+    id: str | None = Field(None, max_length=40)  # the app may name a new one, so it can be chosen as default
+    upi_id: str = Field(max_length=80)
+    label: str = Field("", max_length=40)  # e.g. "Owner GPay"
 
 
 class BusinessIn(BaseModel):
@@ -36,6 +52,9 @@ class BusinessIn(BaseModel):
     footer_note: str | None = Field(None, max_length=200)
     onboarding_done: bool | None = None
     profit_percent: float | None = Field(None, ge=0, le=1000)  # markup on cost for new products
+    upi_ids: list[UpiIn] | None = Field(None, max_length=MAX_UPI_IDS)  # the whole list; wins over upi_id
+    default_upi: str | None = None  # id of one of upi_ids (the first when missing)
+    whatsapp_bill: bool | None = None
 
 
 class CategoryIn(BaseModel):
@@ -57,22 +76,100 @@ def _check_gst(value: float | None):
         raise AppError(400, "GST must be one of {{rates}}.", "bad_gst", rates=", ".join(f"{s:g}%" for s in GST_SLABS))
 
 
+def check_upi(value: str, saved: dict | None = None):
+    """name@bank. One the shop already had passes as it is (saved before this check), so other edits still save."""
+    if saved and any(e["upi_id"] == value for e in saved["upi_ids"]):
+        return
+    if not UPI_RE.match(value):
+        raise AppError(400, "{{upi}} is not a valid UPI ID. It looks like name@bank.", "bad_upi", upi=value)
+
+
+def upi_fields(entries: list[dict], default: str | None) -> dict:
+    """The stored UPI fields: the list, the default's id (the first when unknown) and its UPI ID for old apps."""
+    if not any(e["id"] == default for e in entries):
+        default = entries[0]["id"] if entries else None
+    return {"upi_ids": entries, "default_upi": default,
+            "upi_id": next((e["upi_id"] for e in entries if e["id"] == default), "")}
+
+
+def shop_upis(biz: dict) -> dict:
+    """A shop's UPI fields, including shops saved when there was only one `upi_id`."""
+    if "upi_ids" in biz:
+        return upi_fields(biz.get("upi_ids") or [], biz.get("default_upi"))
+    old = (biz.get("upi_id") or "").strip()
+    return upi_fields([{"id": new_id(), "upi_id": old, "label": ""}] if old else [], None)
+
+
+def _upi_list(items: list[UpiIn], default: str | None, old: dict) -> dict:
+    """The owner's edited list (this app version): each UPI ID checked, no repeats, every entry with its own id."""
+    entries, seen_upi, seen_id = [], set(), set()
+    for item in items:
+        value = item.upi_id.strip()
+        check_upi(value, old)
+        if value.lower() in seen_upi:
+            raise AppError(400, "{{upi}} is in the list twice.", "duplicate_upi", upi=value)
+        seen_upi.add(value.lower())
+        eid = item.id if item.id and item.id not in seen_id else new_id()
+        seen_id.add(eid)
+        entries.append({"id": eid, "upi_id": value, "label": item.label.strip()})
+    return upi_fields(entries, default)
+
+
+def _upi_single(value: str, old: dict) -> dict:
+    """An app that knows one UPI ID sent it: it replaces the default (empty removes it); the others stay."""
+    entries, default = [dict(e) for e in old["upi_ids"]], old["default_upi"]
+    if not value:
+        return upi_fields([e for e in entries if e["id"] != default], None)
+    check_upi(value, old)
+    if same := next((e for e in entries if e["upi_id"].lower() == value.lower()), None):
+        return upi_fields(entries, same["id"])  # already in the list: it becomes the default
+    for e in entries:
+        if e["id"] == default:
+            e["upi_id"] = value
+    if not entries:
+        entries = [{"id": new_id(), "upi_id": value, "label": ""}]
+    return upi_fields(entries, default)
+
+
+def _with_settings(biz: dict) -> dict:
+    return {**biz, **shop_upis(biz), "whatsapp_bill": biz.get("whatsapp_bill", True)}
+
+
 @router.get("/business")
 async def get_business(user: dict = Depends(auth.current_user)):
-    return await get_db().businesses.find_one({"id": user["business_id"]}, {"_id": 0})
+    """Any logged-in user: the Pay, UPI and bill screens read the UPI IDs and the WhatsApp setting."""
+    db = get_db()
+    biz = await db.businesses.find_one({"id": user["business_id"]}, {"_id": 0})
+    if biz is None:
+        return None
+    if "upi_ids" not in biz:  # saved before the list: store it once, so the default keeps its id
+        upis = shop_upis(biz)
+        await db.businesses.update_one({"id": biz["id"], "upi_ids": {"$exists": False}},
+                                       {"$set": {"upi_ids": upis["upi_ids"], "default_upi": upis["default_upi"]}})
+        biz = {**biz, **upis}
+    return _with_settings(biz)
 
 
 @router.put("/business")
 async def update_business(body: BusinessIn, owner: dict = Depends(auth.require("owner"))):
     db = get_db()
-    update = {k: v.strip() if isinstance(v, str) else v for k, v in body.model_dump(exclude_none=True).items()}
+    current = await get_business(owner)
+    data = body.model_dump(exclude_none=True, exclude={"upi_ids", "default_upi"})
+    update = {k: v.strip() if isinstance(v, str) else v for k, v in data.items()}
+    if body.upi_ids is not None:  # the list wins over a single upi_id
+        update.pop("upi_id", None)
+        update.update(_upi_list(body.upi_ids, body.default_upi, current))
+    elif "upi_id" in update:
+        update.update(_upi_single(update["upi_id"], current))
+    elif body.default_upi is not None:
+        update.update(upi_fields(current["upi_ids"], body.default_upi))
     if "gstin" in update:
         update["gstin"] = update["gstin"].upper()
-    if update.get("onboarding_done") and not (update.get("name") or (await get_business(owner)).get("name")):
+    if update.get("onboarding_done") and not (update.get("name") or current.get("name")):
         raise HTTPException(400, "Please enter the shop name first.")
     update["updated_at"] = now_iso()
     await db.businesses.update_one({"id": owner["business_id"]}, {"$set": update})
-    return await db.businesses.find_one({"id": owner["business_id"]}, {"_id": 0})
+    return _with_settings(await db.businesses.find_one({"id": owner["business_id"]}, {"_id": 0}))
 
 
 @router.get("/categories/suggestions")

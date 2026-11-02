@@ -35,7 +35,8 @@ async def _new_owner(db, *, name: str, phone: str | None = None, password: str |
                      google_sub: str | None = None, email: str | None = None) -> dict:
     """A new owner gets a new, empty shop; the setup wizard fills it in."""
     business = {"id": new_id(), "name": "", "address": "", "phone": phone or "", "gst_registered": False,
-                "gstin": "", "upi_id": "", "logo_path": None, "footer_note": "", "currency": "₹",
+                "gstin": "", "upi_id": "", "upi_ids": [], "default_upi": None, "whatsapp_bill": True,
+                "logo_path": None, "footer_note": "", "currency": "₹",
                 "onboarding_done": False, "profit_percent": 60, "created_at": now_iso()}
     user = {"id": new_id(), "business_id": business["id"], "role": "owner", "name": name.strip(),
             "phone": phone, "email": email, "google_sub": google_sub,

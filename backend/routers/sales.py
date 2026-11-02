@@ -6,6 +6,9 @@ Selling more than the stock on hand: only the owner may, and only when the app s
 after the owner saw "Stock will go to -2" and went ahead). The stock then goes below zero and each such line
 keeps `short_qty`, how much of it was not in stock. Everyone else, and app versions that don't send
 `allow_short`, get the usual 400 out_of_stock.
+
+UPI bills keep the UPI ID the money was paid to (`upi_id`): the one the app showed in the QR when it is one of the
+shop's, else the shop's default (also for app versions that don't send it).
 """
 import base64
 import os
@@ -28,6 +31,7 @@ from common import IST, date_key, money, new_id, normalize_in_phone, now_ist, no
 from db import get_db
 from errors import AppError
 from routers import carts
+from routers.business import shop_upis
 from routers.products import context, record_stock
 from units import check_quantity, count, unit_of
 
@@ -52,6 +56,7 @@ class InvoiceIn(BaseModel):
     payment_method: Literal["Cash", "UPI", "Card"] = "Cash"
     gst_removed: bool = False  # owner only: same total, no GST on this bill
     allow_short: bool = False  # owner only: bill even if stock goes below zero (ignored for employees)
+    upi_id: str | None = Field(None, max_length=80)  # UPI only: the shop's UPI ID shown in the QR
 
 
 def price_lines(lines: list[dict], discount: float) -> dict:
@@ -117,6 +122,8 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
     units = [unit_of(products[l.product_id].get("unit") if l.product_id else l.unit) for l in body.items]
     for l, unit in zip(body.items, units):
         check_quantity(unit, l.quantity, l.name.strip())
+
+    paid_to = await _paid_to(db, bid, body.upi_id) if body.payment_method == "UPI" else ""
 
     # Every bill has a customer (name + phone): a saved one, or a new one made from the phone and name.
     customer, new_customer = None, None
@@ -190,6 +197,7 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
         **totals, "payment_method": body.payment_method, "status": "Paid", "gst_removed": gst_removed,
         "customer_id": customer_id, "customer_name": customer_name, "customer_phone": phone or "",
         "customer_address": customer.get("address", ""),  # as it was on the day: editing the customer later leaves bills as they were
+        **({"upi_id": paid_to} if paid_to else {}),
         "created_by": {"id": user["id"], "name": user.get("name", "")},
         "public_token": secrets.token_urlsafe(16), "date_key": date_key(), "created_at": now_iso(),
     }
@@ -201,6 +209,13 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(auth.require("sel
                                        "$set": {"last_purchase_at": invoice["created_at"]}})
     invoice.pop("_id", None)
     return _shown(invoice)
+
+
+async def _paid_to(db, bid: str, sent: str | None) -> str:
+    """The shop's UPI ID this bill was paid to: the one the app sent if it is the shop's, else the default."""
+    upis = shop_upis(await db.businesses.find_one({"id": bid}, {"_id": 0, "upi_id": 1, "upi_ids": 1, "default_upi": 1}) or {})
+    sent = (sent or "").strip().lower()
+    return next((e["upi_id"] for e in upis["upi_ids"] if e["upi_id"].lower() == sent), upis["upi_id"])
 
 
 def _shown(inv: dict) -> dict:

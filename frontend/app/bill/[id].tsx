@@ -1,6 +1,9 @@
 // A bill. Right after payment (done=1) it leads with "paid" and Send on WhatsApp.
 // WhatsApp: straight to the customer's chat if we have their number, else WhatsApp asks for a contact.
-import { useState } from "react";
+// Shop setting "Send bill on WhatsApp" on (the default): right after payment WhatsApp opens by itself, once per bill
+// (not when an old bill is opened again), and the big button stays. Off: no auto-open, and a small button for
+// when the customer asks for the bill.
+import { useEffect, useState } from "react";
 import { Linking, Pressable, ScrollView, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
@@ -10,11 +13,14 @@ import { useTranslation } from "react-i18next";
 import { apiGet } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { BillFileResult, downloadBillPdf, shareBillPdf } from "@/src/bill-file";
+import { useBusiness, whatsappBill } from "@/src/business";
 import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, ErrorView, Header, Icon, LoadingView, Screen, T } from "@/src/components/ui";
 import { formatCurrency, formatDate, formatPhone, formatQtyUnit, formatTime } from "@/src/format";
 import { colors, radius, spacing } from "@/src/theme";
 import type { Invoice } from "@/src/types";
+
+const autoSent = new Set<string>(); // bills WhatsApp already opened for by itself (while the app is open)
 
 export default function Bill() {
   const { t } = useTranslation();
@@ -26,6 +32,8 @@ export default function Bill() {
   const q = useQuery<Invoice>({ queryKey: ["invoice", id], queryFn: () => apiGet(`/invoices/${id}`) });
   const [busy, setBusy] = useState<"" | "wa" | "pdf" | "download">("");
   const inv = q.data;
+  const biz = useBusiness();
+  const waOn = whatsappBill(biz.data);
   const home = () => (router.canGoBack() ? router.back() : router.replace("/(tabs)"));
 
   async function run(kind: "wa" | "pdf" | "download", fn: () => Promise<unknown>) {
@@ -48,6 +56,18 @@ export default function Bill() {
     const digits = inv!.customer_phone.replace(/\D/g, "");
     await Linking.openURL(`https://wa.me/${digits}?text=${encodeURIComponent(text)}`);
   });
+
+  useEffect(() => {
+    if (!justPaid || !inv || !biz.data || !waOn || !inv.customer_phone || autoSent.has(inv.id)) return;
+    const billId = inv.id;
+    autoSent.add(billId);
+    let fired = false;
+    const timer = setTimeout(() => { fired = true; whatsapp(); }, 500); // the paid tick shows first
+    return () => {
+      if (!fired) { clearTimeout(timer); autoSent.delete(billId); } // left (or re-run) before it opened
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [justPaid, inv, biz.data, waOn]);
 
   const pdf = () => run("pdf", () => shareBillPdf(id, inv!.invoice_number));
 
@@ -85,7 +105,7 @@ export default function Bill() {
           </View>
         )}
 
-        <Pressable testID="bill-whatsapp" disabled={!!busy} onPress={whatsapp}
+        {waOn && <Pressable testID="bill-whatsapp" disabled={!!busy} onPress={whatsapp}
           style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: spacing.lg, padding: spacing.lg, minHeight: 84, borderRadius: radius.lg,
             backgroundColor: pressed ? "#0E7A3F" : colors.whatsapp, opacity: busy && busy !== "wa" ? 0.6 : 1 })}>
           <Icon name="whatsapp" size={40} color={colors.white} />
@@ -93,11 +113,15 @@ export default function Bill() {
             <T v="bodyLarge" color={colors.white}>{busy === "wa" ? t("Opening WhatsApp") : t("Send bill on WhatsApp")}</T>
             <T v="small" color="#DDF5E6">{who}</T>
           </View>
-        </Pressable>
+        </Pressable>}
         <View style={{ flexDirection: "row", gap: spacing.md }}>
           <Button title={t("Share PDF")} icon="file-pdf-box" variant="outline" size="md" style={{ flex: 1 }} onPress={pdf} loading={busy === "pdf"} testID="bill-pdf" />
           <Button title={t("Download")} icon="download" variant="outline" size="md" style={{ flex: 1 }} onPress={download} loading={busy === "download"} testID="bill-download" />
         </View>
+        {!waOn && (
+          <Button title={busy === "wa" ? t("Opening WhatsApp") : t("Send bill on WhatsApp")} icon="whatsapp" variant="outline" size="md"
+            onPress={whatsapp} disabled={!!busy && busy !== "wa"} loading={busy === "wa"} testID="bill-whatsapp" />
+        )}
 
         <View style={{ gap: spacing.sm, padding: spacing.lg, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, marginTop: spacing.xs }}>
           {!!inv.shop?.name && (
@@ -151,6 +175,7 @@ export default function Bill() {
             <T v="title" testID="bill-total">{formatCurrency(inv.grand_total)}</T>
           </View>
           <T v="small">{t("Paid by {{method}} · made by {{name}}", { method: t(inv.payment_method), name: inv.created_by?.name ?? "" })}</T>
+          {!!inv.upi_id && <T v="small" testID="bill-upi">{t("Paid to UPI ID {{upi}}", { upi: inv.upi_id })}</T>}
         </View>
       </ScrollView>
       {justPaid && (
