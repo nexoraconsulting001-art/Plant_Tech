@@ -761,5 +761,15 @@
   "Give back {{amount}}": "{{amount}} वापस दें",
   "Collect {{amount}} more": "{{amount}} और लें",
   "Nothing to give back or collect": "न कुछ वापस देना, न लेना",
-  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।"
+  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।",
+  "The network is slow. Please try again.": "नेटवर्क धीमा है। कृपया फिर कोशिश करें।",
+  "Saved order added": "सेव किया ऑर्डर जोड़ा गया",
+  "{{name}} had a saved order with {{items}}. They are now in this order.": "{{name}} का एक सेव किया ऑर्डर था ({{items}})। वे अब इस ऑर्डर में हैं।",
+  "No internet": "इंटरनेट नहीं है",
+  "The order is kept on this phone. Bills can be made when the internet is back.": "ऑर्डर इस फ़ोन में रखा है। इंटरनेट वापस आने पर बिल बन सकेंगे।",
+  "Bills can be sent when the internet is back.": "इंटरनेट वापस आने पर बिल भेजे जा सकेंगे।",
+  "Not saved. Try again": "सेव नहीं हुआ। फिर कोशिश करें",
+  "Not saved. The order is kept on this phone.": "सेव नहीं हुआ। ऑर्डर इस फ़ोन में रखा है।",
+  "No answer from the server": "सर्वर से जवाब नहीं आया",
+  "The bill may or may not have been made. Tap the payment again: it will not be billed twice.": "हो सकता है बिल बना हो, हो सकता है न बना हो। भुगतान फिर से टैप करें: बिल दो बार नहीं बनेगा।"
 }

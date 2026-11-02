@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 
 import { useAuth } from "@/src/auth";
 import { CartItem, isLoose, useCart } from "@/src/cart-context";
+import { NetStatus } from "@/src/components/net-status";
 import { CorrectionBanner, DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer";
 import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, EmptyState, Field, Header, Icon, MAX_FONT_SCALE, Screen, Stepper, T, Thumb, Toggle } from "@/src/components/ui";
@@ -41,6 +42,7 @@ export default function OrderCart() {
     <Screen bg={colors.surface}>
       <Header title={`${t("Order")} · ${plural(cart.count, "1 item", "{{n}} items")}`} onBack={back} right={<DiscardOrder />} />
       <KeyboardAwareScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }} bottomOffset={24}>
+        <NetStatus />
         <CorrectionBanner />
         <OrderCustomerBar />
         {!cart.customer && (

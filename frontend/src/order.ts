@@ -5,20 +5,57 @@
 // Correcting a bill (cart.correcting): the same order goes to /invoices/{id}/correct, which cancels the old bill and
 // makes this one with a new number. If the bill can no longer be corrected (cancelled meanwhile, or the days are
 // over), the owner is told and the correction is dropped.
+// Never billed twice: every try for this order (a retry after no answer, "Bill anyway") sends the same
+// Idempotency-Key (cart.billKey), and the server answers a key it has seen with the bill it already made. Nothing is
+// retried by itself: after no answer the order stays on screen and the worker taps the payment again.
+// After the bill (afterBill): only what a bill changes is marked out of date, and the bill screen opens from the answer.
 import { useState } from "react";
 import { useRouter } from "expo-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, apiPost } from "@/src/api";
+import { ApiError, apiPost, noReply } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { isLoose, useCart } from "@/src/cart-context";
+import { isLoose, OrderCustomer, useCart } from "@/src/cart-context";
 import { useToast } from "@/src/components/toast";
 import { confirm, notice } from "@/src/confirm";
 import { askOwner } from "@/src/stock";
-import type { Invoice } from "@/src/types";
+import type { Business, Invoice } from "@/src/types";
 
 export type PaymentMethod = Invoice["payment_method"];
+
+// What a bill (made or cancelled) changes: today's numbers, the orders list and totals, reports, the customer, their
+// line in customer searches, and the stock of what was sold. Marked out of date only, not reloaded now: each screen
+// that shows them reloads when it is next shown (useRefreshOnFocus, or on opening), so a bill costs no extra calls.
+export function billChanged(qc: QueryClient) {
+  const stale = (queryKey: unknown[]) => qc.invalidateQueries({ queryKey, refetchType: "none" });
+  // ["product"] and ["customer"]: every product and customer page, also those a correction moved away from
+  for (const key of [["today"], ["orders"], ["orders-summary"], ["report"], ["employee-report"], ["customers"], ["customer"], ["products"],
+    ["product"]]) stale(key);
+  // customer searches; the recent list ("") is kept up to date by afterBill instead
+  qc.invalidateQueries({ queryKey: ["customer-find"], predicate: (q) => q.queryKey[1] !== "", refetchType: "none" });
+}
+
+// A new bill (replaced: the bill a correction cancelled).
+export function afterBill(qc: QueryClient, inv: Invoice, replaced?: string) {
+  billChanged(qc);
+  if (replaced) qc.invalidateQueries({ queryKey: ["invoice", replaced], refetchType: "none" }); // now Cancelled
+  // The bill screen shows this bill at once, with the shop's lines as GET /invoices/{id} adds them (from Shop details
+  // when they are loaded; else the bill is loaded once more for them).
+  const biz = qc.getQueryData<Business>(["business"]);
+  qc.setQueryData<Invoice>(["invoice", inv.id], biz ? { ...inv, shop: { name: biz.name ?? "", address: biz.address ?? "", phone: biz.phone ?? "" } } : inv,
+    { updatedAt: biz ? Date.now() : 0 });
+  // "Recent customers" on the New order screen: this customer moves to the top.
+  const cid = inv.customer_id;
+  if (cid) {
+    qc.setQueryData<OrderCustomer[]>(["customer-find", ""], (list) => {
+      if (!list) return list;
+      const was = list.find((c) => c.id === cid);
+      const me = { id: cid, name: inv.customer_name, phone: inv.customer_phone, purchase_count: (was?.purchase_count ?? 0) + (replaced ? 0 : 1) };
+      return [me, ...list.filter((c) => c.id !== cid)].slice(0, Math.max(list.length, 1));
+    });
+  }
+}
 
 export function useCreateBill() {
   const { t } = useTranslation();
@@ -30,46 +67,55 @@ export function useCreateBill() {
   const [busy, setBusy] = useState(false);
 
   const fixing = cart.correcting;
-  const send = (method: PaymentMethod, allowShort: boolean, upiId?: string): Promise<Invoice> => apiPost(fixing ? `/invoices/${fixing.id}/correct` : "/invoices", {
-    items: cart.items.map((i) => ({ product_id: isLoose(i.product_id) ? null : i.product_id, name: i.name, quantity: i.quantity, price: i.price,
-      unit: i.unit ?? null })),
-    customer_id: cart.customer!.id,
-    discount: cart.discount,
-    payment_method: method,
-    gst_removed: cart.gstRemoved,
-    ...(allowShort ? { allow_short: true } : {}),
-    ...(method === "UPI" && upiId ? { upi_id: upiId } : {}),
-  });
+  const send = (method: PaymentMethod, allowShort: boolean, key: string, upiId?: string): Promise<Invoice> =>
+    apiPost(fixing ? `/invoices/${fixing.id}/correct` : "/invoices", {
+      items: cart.items.map((i) => ({ product_id: isLoose(i.product_id) ? null : i.product_id, name: i.name, quantity: i.quantity, price: i.price,
+        unit: i.unit ?? null })),
+      customer_id: cart.customer!.id,
+      discount: cart.discount,
+      payment_method: method,
+      gst_removed: cart.gstRemoved,
+      ...(allowShort ? { allow_short: true } : {}),
+      ...(method === "UPI" && upiId ? { upi_id: upiId } : {}),
+    }, { headers: { "Idempotency-Key": key } });
 
   async function create(method: PaymentMethod, allowShort = false, upiId?: string) {
     if (busy || !cart.items.length || !cart.customer) return;
     setBusy(true);
+    const key = cart.billKey();
     try {
       await cart.beforeBill();
       let inv: Invoice;
       try {
-        inv = await send(method, allowShort, upiId);
+        inv = await send(method, allowShort, key, upiId);
       } catch (e) {
         if (!(e instanceof ApiError) || e.code !== "out_of_stock") throw e;
         if (allowShort) throw e;
         const name = String(e.params.name ?? "");
         if (!isOwner) throw new Error(askOwner(name, Number(e.params.n) || 0, cart.items.find((i) => i.name === name)?.unit));
-        if (!(await confirm(t("Not enough stock"), `${e.message} ${t("Bill anyway? The stock will go below zero.")}`, t("Bill anyway")))) return;
-        inv = await send(method, true, upiId);
+        if (!(await confirm(t("Not enough stock"), `${e.message} ${t("Bill anyway? The stock will go below zero.")}`, t("Bill anyway")))) {
+          cart.billFailed(false);
+          return;
+        }
+        inv = await send(method, true, key, upiId);
       }
       cart.billed();
-      qc.invalidateQueries();
+      afterBill(qc, inv, fixing?.id);
       // Close the order screens; the bill opens on top of Home.
       router.dismissTo("/(tabs)");
       router.push({ pathname: "/bill/[id]", params: { id: inv.id, done: "1" } });
     } catch (e: any) {
+      cart.billFailed(noReply(e));
       if (fixing && e instanceof ApiError && (e.code === "bill_cancelled" || e.code === "bill_locked")) {
         await notice(t("This bill can't be corrected"), e.message);
         await cart.discard();
         router.dismissTo("/(tabs)");
         return;
       }
-      toast.show(e.message, "error");
+      // No answer: the bill may have been made. Trying again is safe (same key) and shows it if it was.
+      if (noReply(e)) {
+        await notice(t("No answer from the server"), t("The bill may or may not have been made. Tap the payment again: it will not be billed twice."));
+      } else toast.show(e.message, "error");
     } finally {
       setBusy(false);
     }

@@ -1,10 +1,17 @@
 // API client. Every request carries the login token; a 401 logs the user out.
 // Server messages are shown in the app's language: `key` + `params` when the server sends them
 // (messages with numbers or names), else the English `detail` is itself the translation key.
+// Every request has a time limit (AbortSignal.timeout): 10 s, 45 s for AI photo reads and photo uploads. No reply in
+// time is a TimeoutError (code "timeout"), no connection an ApiError with code "network"; both have status 0.
+// A caller's own signal (React Query passes one) cancels a request that is no longer needed, e.g. an older search.
 import i18n from "i18next";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 export const API = `${BASE}/api`;
+
+const TIMEOUT_MS = 10_000;
+const SLOW_TIMEOUT_MS = 45_000; // Claude reading a photo or a bill, or a photo going up on a slow connection
+const timeoutFor = (path: string) => (path.startsWith("/ai/") || path.startsWith("/upload") ? SLOW_TIMEOUT_MS : TIMEOUT_MS);
 
 let token: string | null = null;
 let onUnauthorized: (() => void) | null = null;
@@ -23,18 +30,37 @@ export class ApiError extends Error {
   }
 }
 
+// The server didn't answer in time. The request may still have reached it (see the bill's Idempotency-Key in order.ts).
+export class TimeoutError extends ApiError {
+  constructor() {
+    super(i18n.t("The network is slow. Please try again."), 0, "timeout");
+  }
+}
+
+// No answer at all (offline or timed out): the request may or may not have reached the server.
+export const noReply = (e: unknown) => e instanceof ApiError && e.status === 0;
+
+export type RequestOptions = { signal?: AbortSignal; timeoutMs?: number; headers?: Record<string, string> };
+
 const failed = (status: number) => i18n.t("Something went wrong. Please try again. (Error {{status}})", { status });
 
-async function request(method: string, path: string, body?: unknown) {
-  const headers: Record<string, string> = {};
+async function request(method: string, path: string, body?: unknown, opts: RequestOptions = {}) {
+  const headers: Record<string, string> = { ...opts.headers };
   const sent = token; // a reply to a request sent before the saved login came back must not log out
   if (sent) headers.Authorization = `Bearer ${sent}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
+  const timer = AbortSignal.timeout(opts.timeoutMs ?? timeoutFor(path));
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timer]) : timer;
+  const lost = (e: unknown): never => {
+    if (opts.signal?.aborted) throw e; // cancelled by the caller: nobody is waiting for an answer
+    if (timer.aborted) throw new TimeoutError();
+    throw new ApiError(i18n.t("No internet connection. Please check your connection and try again."), 0, "network");
+  };
   let res: Response;
   try {
-    res = await fetch(`${API}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-  } catch {
-    throw new ApiError(i18n.t("No internet connection. Please check your connection and try again."), 0);
+    res = await fetch(`${API}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
+  } catch (e) {
+    return lost(e);
   }
   if (!res.ok) {
     let msg = failed(res.status);
@@ -53,14 +79,19 @@ async function request(method: string, path: string, body?: unknown) {
     if (res.status === 401 && sent && sent === token && onUnauthorized) onUnauthorized();
     throw new ApiError(msg, res.status, code, params);
   }
-  return res.json();
+  try {
+    return await res.json();
+  } catch (e) {
+    if (timer.aborted || opts.signal?.aborted) return lost(e); // the answer stopped half-way
+    throw e;
+  }
 }
 
-export const apiGet = (path: string) => request("GET", path);
-export const apiPost = (path: string, body: unknown = {}) => request("POST", path, body);
-export const apiPut = (path: string, body: unknown = {}) => request("PUT", path, body);
-export const apiPatch = (path: string, body: unknown = {}) => request("PATCH", path, body);
-export const apiDelete = (path: string) => request("DELETE", path);
+export const apiGet = (path: string, opts?: RequestOptions) => request("GET", path, undefined, opts);
+export const apiPost = (path: string, body: unknown = {}, opts?: RequestOptions) => request("POST", path, body, opts);
+export const apiPut = (path: string, body: unknown = {}, opts?: RequestOptions) => request("PUT", path, body, opts);
+export const apiPatch = (path: string, body: unknown = {}, opts?: RequestOptions) => request("PATCH", path, body, opts);
+export const apiDelete = (path: string, opts?: RequestOptions) => request("DELETE", path, undefined, opts);
 
 // Upload a photo (base64 from useImageCapture); returns its storage path.
 // JSON, not multipart: Expo's fetch rejects React Native's {uri,name,type} FormData parts.
@@ -74,7 +105,14 @@ export function fileUrl(path?: string | null): string | undefined {
 }
 
 export async function fetchText(path: string): Promise<string> {
-  const res = await fetch(`${API}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  if (!res.ok) throw new ApiError(failed(res.status), res.status);
-  return res.text();
+  const timer = AbortSignal.timeout(TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: timer });
+    if (res.ok) return await res.text();
+  } catch {
+    if (timer.aborted) throw new TimeoutError();
+    throw new ApiError(i18n.t("No internet connection. Please check your connection and try again."), 0, "network");
+  }
+  throw new ApiError(failed(res.status), res.status);
 }

@@ -6,6 +6,9 @@
 // The owner can correct or cancel a bill until correct_until (7 days from the first bill): Correct loads it into the
 // order screens (see cart-context), Cancel asks why. A cancelled bill says so at the top and links to the bill that
 // replaced it; a corrected bill links to the one it replaces.
+// Calls: right after payment the bill comes from the Pay answer (afterBill in order.ts), not loaded again; a bill
+// only changes when cancelled or corrected, so it is kept 5 minutes; its WhatsApp link never changes, so it is
+// asked for once per bill.
 import { useEffect, useState } from "react";
 import { Linking, Pressable, ScrollView, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -19,14 +22,17 @@ import { BillFileResult, downloadBillPdf, shareBillPdf } from "@/src/bill-file";
 import { useBusiness, whatsappBill } from "@/src/business";
 import { useCart } from "@/src/cart-context";
 import { notice } from "@/src/confirm";
+import { NetStatus } from "@/src/components/net-status";
 import { Sheet } from "@/src/components/sheet";
 import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, Chip, ErrorView, Field, Header, Icon, LoadingView, Screen, T } from "@/src/components/ui";
 import { formatCurrency, formatDate, formatPhone, formatQtyUnit, formatTime } from "@/src/format";
 import { colors, radius, spacing } from "@/src/theme";
+import { billChanged } from "@/src/order";
 import type { BillRef, Invoice, Product } from "@/src/types";
 
 const autoSent = new Set<string>(); // bills WhatsApp already opened for by itself (while the app is open)
+const BILL_FOR_MS = 5 * 60_000;
 
 export default function Bill() {
   const { t } = useTranslation();
@@ -35,7 +41,7 @@ export default function Bill() {
   const { user, isOwner } = useAuth();
   const { id, done } = useLocalSearchParams<{ id: string; done?: string }>();
   const justPaid = done === "1";
-  const q = useQuery<Invoice>({ queryKey: ["invoice", id], queryFn: () => apiGet(`/invoices/${id}`) });
+  const q = useQuery<Invoice>({ queryKey: ["invoice", id], queryFn: ({ signal }) => apiGet(`/invoices/${id}`, { signal }), staleTime: BILL_FOR_MS });
   const [busy, setBusy] = useState<"" | "wa" | "pdf" | "download" | "correct">("");
   const [cancelling, setCancelling] = useState(false);
   const cart = useCart();
@@ -58,7 +64,8 @@ export default function Bill() {
   }
 
   const whatsapp = () => run("wa", async () => {
-    const { url } = await apiGet(`/invoices/${id}/share`);
+    const { url } = await qc.fetchQuery<{ url: string }>({ queryKey: ["invoice-share", id], queryFn: () => apiGet(`/invoices/${id}/share`),
+      staleTime: Infinity });
     const greet = inv!.customer_phone && inv!.customer_name !== "Walk-in customer" ? ` ${inv!.customer_name}` : "";
     const en = i18n.getFixedT("en"); // customers get the message in English, like the bill
     const vars = { name: greet, shop: user?.business?.name ?? "", amount: formatCurrency(inv!.grand_total), no: inv!.invoice_number, url,
@@ -132,6 +139,7 @@ export default function Bill() {
     <Screen bg={colors.surface}>
       {justPaid ? <View style={{ height: 8 }} /> : <Header title={t("Bill {{no}}", { no: inv.invoice_number })} onBack={home} />}
       <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
+        <NetStatus order={false} />
         {cancelled && (
           <View testID="bill-cancelled" style={{ gap: spacing.sm, padding: spacing.lg, borderRadius: radius.lg, borderWidth: 1,
             borderColor: colors.redLine, backgroundColor: colors.redTint }}>
@@ -266,9 +274,10 @@ export default function Bill() {
         </BottomBar>
       )}
       <CancelSheet visible={cancelling} onClose={() => setCancelling(false)} inv={inv}
-        onDone={() => {
+        onDone={(done) => {
           setCancelling(false);
-          qc.invalidateQueries();
+          qc.setQueryData<Invoice>(["invoice", inv.id], { ...done, shop: inv.shop }); // the answer is the cancelled bill
+          billChanged(qc);
           toast.show(t("Bill {{no}} cancelled", { no: inv.invoice_number }), "success");
         }} />
     </Screen>
@@ -276,7 +285,9 @@ export default function Bill() {
 }
 
 // Why the bill is cancelled (kept on the bill for the owner; the customer's copy only says Cancelled).
-function CancelSheet({ visible, onClose, inv, onDone }: { visible: boolean; onClose: () => void; inv: Invoice; onDone: () => void }) {
+function CancelSheet({ visible, onClose, inv, onDone }: {
+  visible: boolean; onClose: () => void; inv: Invoice; onDone: (cancelled: Invoice) => void;
+}) {
   const { t } = useTranslation();
   const toast = useToast();
   const [reason, setReason] = useState("");
@@ -286,9 +297,9 @@ function CancelSheet({ visible, onClose, inv, onDone }: { visible: boolean; onCl
   async function cancel() {
     setBusy(true);
     try {
-      await apiPost(`/invoices/${inv.id}/cancel`, { reason: reason.trim() });
+      const done: Invoice = await apiPost(`/invoices/${inv.id}/cancel`, { reason: reason.trim() });
       setReason("");
-      onDone();
+      onDone(done);
     } catch (e: any) {
       toast.show(e.message, "error");
     } finally {

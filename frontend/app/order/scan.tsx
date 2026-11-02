@@ -3,12 +3,14 @@
 // More than the stock count of a product: the owner may, after a warning (it stays a normal line of that
 // product with its GST, and the stock goes below zero); an employee may not.
 // Photos of anything a nursery doesn't sell (or of a bill) are refused with an explanation.
+// Search by name: sent 250 ms after the last key, with the last results kept on screen meanwhile; a search
+// overtaken by a newer one is cancelled (React Query's signal).
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { Redirect, useRouter } from "expo-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useTranslation } from "react-i18next";
 
@@ -17,6 +19,7 @@ import { useAuth } from "@/src/auth";
 import { useCart } from "@/src/cart-context";
 import { CorrectionBanner, DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer";
 import { CategoryPicker } from "@/src/components/category-picker";
+import { NetStatus } from "@/src/components/net-status";
 import { choose, confirm, notice } from "@/src/confirm";
 import { useToast } from "@/src/components/toast";
 import { Badge, BottomBar, Button, Field, Header, Icon, Screen, SearchBox, Segmented, Stepper, T, Thumb } from "@/src/components/ui";
@@ -26,6 +29,8 @@ import { askOwner, shortWarning } from "@/src/stock";
 import { colors, radius, spacing, touch } from "@/src/theme";
 import type { Product } from "@/src/types";
 import { MAX_QTY, roundQty, unitShort, wholeUnit } from "@/src/units";
+
+const SEARCH_AFTER_MS = 250;
 
 type Stage =
   | { kind: "start" }
@@ -127,16 +132,25 @@ function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch }: {
     return () => clearTimeout(id);
   }, [focusSearch]);
   const query = q.trim();
+  const [term, setTerm] = useState(""); // what was searched: the query once typing pauses
+  useEffect(() => {
+    const id = setTimeout(() => setTerm(query), SEARCH_AFTER_MS);
+    return () => clearTimeout(id);
+  }, [query]);
   const results = useQuery<Product[]>({
-    queryKey: ["products", "search", query],
-    queryFn: () => apiGet(`/products?search=${encodeURIComponent(query)}`),
-    enabled: query.length >= 2,
+    queryKey: ["products", "search", term],
+    queryFn: ({ signal }) => apiGet(`/products?search=${encodeURIComponent(term)}`, { signal }),
+    enabled: query.length >= 2 && term.length >= 2,
+    placeholderData: keepPreviousData,
   });
+  const shown = query.length >= 2 ? results.data ?? [] : [];
+  const settled = query.length >= 2 && query === term && !!results.data && !results.isPlaceholderData; // the results are for what is typed
 
   return (
     <Screen bg={colors.surface}>
       <Header title={t("Add items")} close onBack={() => router.back()} testID="scan-close" right={<DiscardOrder />} />
       <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.md }}>
+        <NetStatus />
         <OrderCustomerBar />
         <CorrectionBanner />
       </View>
@@ -181,8 +195,8 @@ function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch }: {
         <View style={{ paddingHorizontal: spacing.lg, paddingTop: query ? 0 : 14, gap: spacing.md }}>
           <SearchBox ref={searchRef} value={q} onChangeText={setQ} placeholder={t("Or search by product name")} testID="scan-search" />
 
-          {query.length >= 2 && results.isLoading && <ActivityIndicator color={colors.green} style={{ marginTop: spacing.md }} />}
-          {(results.data ?? []).map((p) => (
+          {query.length >= 2 && !shown.length && !settled && !results.isError && <ActivityIndicator color={colors.green} style={{ marginTop: spacing.md }} />}
+          {shown.map((p) => (
             <Pressable key={p.id} testID={`scan-result-${p.name}`} onPress={() => onPick(p)}
               style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 72, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line }}>
               <Thumb path={p.image_path} size={52} />
@@ -195,13 +209,13 @@ function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch }: {
               <T v="number">{formatCurrency(p.selling_price)}</T>
             </Pressable>
           ))}
-          {query.length >= 2 && results.data && (
+          {settled && (
             <Pressable testID="scan-not-listed" onPress={() => onNew(query)}
               style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 64, borderRadius: radius.lg, borderWidth: 2,
                 borderStyle: "dashed", borderColor: colors.green }}>
               <Icon name="plus-circle" size={30} color={colors.green} />
               <T v="bold" color={colors.greenDark} style={{ flex: 1 }}>
-                {results.data.length ? t("Sell “{{q}}” as a new item", { q: query }) : t("“{{q}}” is not in your products", { q: query })}
+                {shown.length ? t("Sell “{{q}}” as a new item", { q: query }) : t("“{{q}}” is not in your products", { q: query })}
               </T>
             </Pressable>
           )}

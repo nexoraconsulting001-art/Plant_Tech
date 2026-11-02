@@ -15,6 +15,7 @@ import { useAuth } from "@/src/auth";
 import { businessQuery, upiList, useBusiness } from "@/src/business";
 import { isLoose, useCart } from "@/src/cart-context";
 import { confirm, notice } from "@/src/confirm";
+import { NetStatus } from "@/src/components/net-status";
 import { CorrectionBanner, OrderCustomerBar } from "@/src/components/order-customer";
 import { useToast } from "@/src/components/toast";
 import { Button, Header, Icon, IconName, Screen, T } from "@/src/components/ui";
@@ -86,6 +87,7 @@ export default function OrderPay() {
     <Screen bg={colors.surface}>
       <Header title={t("Payment")} />
       <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
+        <NetStatus />
         <CorrectionBanner />
         <View style={{ alignItems: "center", padding: spacing.lg, borderRadius: radius.xl, backgroundColor: colors.greenTint }}>
           <T v="label" color={colors.greenDark}>{t("Customer pays")}</T>
