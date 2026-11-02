@@ -1,0 +1,169 @@
+# Checks on every pull request and push. Branch protection should require the single "CI result" check.
+#   backend   ruff, then pytest on a real MongoDB 7 replica set (transactions work as in production)
+#   audit     pip-audit on both lock files (known vulnerabilities in pinned Python packages)
+#   image     build the API image and scan it with Trivy (HIGH/CRITICAL with a fix available fail)
+#   secrets   gitleaks over the commits this push or pull request adds
+#   app       tsc, eslint, the Hindi completeness check and expo-doctor
+# Also called by deploy.yml (scope "backend-tests": only the backend job) before every deploy, and weekly so a
+# newly published vulnerability shows up even when nobody pushes.
+# Every action is pinned by commit SHA (the tag is in the comment); Dependabot proposes updates.
+name: CI
+
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: "30 3 * * 1"  # Mondays 09:00 India time
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      scope:
+        description: "all, or backend-tests (deploy gate: ruff and pytest only)"
+        type: string
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  # a newer push to the same pull request cancels the older run; pushes to branches always finish
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  backend:
+    name: Backend lint and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.lock
+      - name: Install (pinned, with hashes)
+        run: pip install --require-hashes --no-deps -r backend/requirements-dev.lock
+      - name: Ruff
+        working-directory: backend
+        run: ruff check --output-format=github .
+      - name: Start MongoDB 7 as a single-node replica set (as in deploy/compose.yaml)
+        run: |
+          docker run -d --name mongo -p 127.0.0.1:27017:27017 mongo:7.0 --replSet rs0 --bind_ip_all
+          for _ in $(seq 1 30); do
+            if docker exec mongo mongosh --quiet --eval "try { rs.status().ok } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: '127.0.0.1:27017'}]}).ok }; db.hello().isWritablePrimary || quit(1)" >/dev/null 2>&1; then
+              echo "replica set rs0 has a primary"; exit 0
+            fi
+            sleep 2
+          done
+          docker logs mongo; exit 1
+      - name: Pytest
+        working-directory: backend
+        env:
+          MONGO_URL: mongodb://127.0.0.1:27017/?replicaSet=rs0
+        run: python -m pytest -q
+
+  audit:
+    name: Python dependency audit
+    if: inputs.scope != 'backend-tests'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install pip-audit==2.10.1
+      - name: pip-audit (the image's packages, then the dev tools)
+        run: |
+          pip-audit --strict --disable-pip --require-hashes -r backend/requirements.lock
+          pip-audit --strict --disable-pip --require-hashes -r backend/requirements-dev.lock
+
+  image:
+    name: Image build and Trivy scan
+    if: inputs.scope != 'backend-tests'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Build the API image
+        run: docker build --build-arg GIT_SHA=${{ github.sha }} -t hara-hisaab-api:ci backend
+      - name: Trivy (OS and Python packages)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: hara-hisaab-api:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+  secrets:
+    name: Secret scan
+    if: inputs.scope != 'backend-tests'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: gitleaks (only the commits this run adds; .gitleaks.toml)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # a new branch (before = 000...) or a scheduled run: the last commit only
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            RANGE="$HEAD~1..$HEAD"; git cat-file -e "$HEAD~1^{commit}" 2>/dev/null || RANGE="$HEAD"
+          else
+            RANGE="$BASE..$HEAD"
+          fi
+          echo "scanning $RANGE"
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git --redact --no-banner --config /repo/.gitleaks.toml --log-opts="$RANGE" /repo
+
+  app:
+    name: App checks
+    if: inputs.scope != 'backend-tests'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - run: yarn install --frozen-lockfile --non-interactive
+      - name: TypeScript
+        run: npx tsc --noEmit
+      - name: ESLint
+        run: npx eslint app src
+      - name: Every text has a Hindi translation
+        run: npm run i18n:check
+      - name: expo-doctor
+        # Not blocking yet: it fails on Expo patch releases (expo, expo-router, expo-sharing were one patch behind
+        # on 2 Nov 2026). Make it blocking once package.json is current (npx expo install --check).
+        continue-on-error: true
+        run: npx expo-doctor
+
+  result:
+    name: CI result
+    if: always()
+    needs: [backend, audit, image, secrets, app]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: All checks passed (skipped ones count as passed)
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac
