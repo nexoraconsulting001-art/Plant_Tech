@@ -1,7 +1,7 @@
 {
   "cli": {
     "version": ">= 16.0.0",
-    "appVersionSource": "local"
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -14,40 +14,39 @@
       },
       "env": {
         "APP_VARIANT": "development",
-        "EXPO_PUBLIC_BACKEND_URL": "https://nurserypos-staging.140-238-251-141.sslip.io"
+        "EXPO_PUBLIC_BACKEND_URL": "https://nurserypos-staging.140-238-251-141.sslip.io",
+        "SENTRY_ALLOW_FAILURE": "true"
       }
     },
     "staging": {
       "distribution": "internal",
       "environment": "preview",
       "channel": "staging",
+      "autoIncrement": true,
       "android": {
         "buildType": "apk"
       },
       "env": {
         "APP_VARIANT": "staging",
-        "EXPO_PUBLIC_BACKEND_URL": "https://nurserypos-staging.140-238-251-141.sslip.io"
+        "EXPO_PUBLIC_BACKEND_URL": "https://nurserypos-staging.140-238-251-141.sslip.io",
+        "SENTRY_ALLOW_FAILURE": "true"
       }
     },
     "prod-apk": {
       "distribution": "internal",
       "environment": "production",
       "channel": "production",
+      "autoIncrement": true,
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://nurserypos.140-238-251-141.sslip.io"
       }
     },
     "production": {
       "environment": "production",
       "channel": "production",
+      "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
-      },
-      "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://nurserypos.140-238-251-141.sslip.io"
       }
     }
   },
