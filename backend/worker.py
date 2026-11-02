@@ -26,7 +26,7 @@ import observability
 import push
 from settings import check
 
-JOB_MODULES: list[str] = ["push", "notify", "routers.library"]  # modules with @jobs.job functions, imported so the worker knows them
+JOB_MODULES: list[str] = ["push", "notify", "routers.library", "routers.files"]  # modules with @jobs.job functions, imported so the worker knows them
 TICK_TIMEOUT = 300  # seconds; notify.STALE_CLAIM is longer, so a claim older than that has no live holder
 log = logging.getLogger("worker")
 
