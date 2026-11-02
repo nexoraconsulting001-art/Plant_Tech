@@ -30,7 +30,7 @@ import ratelimit
 import storage_client
 from common import now_iso
 from db import get_db
-from routers import notifications
+from routers import files, notifications
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 
@@ -123,17 +123,21 @@ async def erase_login(db, person: dict, *, by: dict | None):
 # ---- erasing a shop after the grace period -------------------------------------------------------------------
 
 def _delete_files(paths: list[str]):
+    """The shop's photos and their thumbnails, from the private and the public store (WP-7: same keys in both)."""
+    keys = [k for p in paths for k in (p, files.thumb_key(p))]
+    stores = [storage_client.PRIVATE] + ([storage_client.PUBLIC] if storage_client.public_store_separate() else [])
     s3 = storage_client.init_storage()
-    if s3 is not None:
-        for i in range(0, len(paths), 1000):  # DeleteObjects takes up to 1000 keys
-            s3.delete_objects(Bucket=storage_client.R2_BUCKET,
-                              Delete={"Objects": [{"Key": p} for p in paths[i:i + 1000]], "Quiet": True})
-        return
-    for p in paths:
-        try:
-            storage_client._local_path(p).unlink(missing_ok=True)  # refuses paths outside the photo folder
-        except (OSError, ValueError):
-            pass
+    for store in stores:
+        if s3 is not None:
+            for i in range(0, len(keys), 1000):  # DeleteObjects takes up to 1000 keys
+                s3.delete_objects(Bucket=storage_client._bucket(store),
+                                  Delete={"Objects": [{"Key": k} for k in keys[i:i + 1000]], "Quiet": True})
+            continue
+        for k in keys:
+            try:
+                storage_client._local_path(k, store).unlink(missing_ok=True)  # refuses paths outside the photo folder
+            except (OSError, ValueError):
+                pass
 
 
 async def _archive(db, business: dict, now: datetime) -> dict:
@@ -181,6 +185,7 @@ async def erase_shop(db, business_id: str, now: datetime | None = None) -> dict 
             if r.deleted_count:
                 deleted[name] = r.deleted_count
         await db.counters.delete_many({"_id": {"$regex": f"^[^:]+:{re.escape(business_id)}(:|$)"}})
+        await db.summary_schedule.delete_one({"_id": business_id})  # keyed by the shop id, no business_id field
         await db.businesses.delete_one({"id": business_id})
     summary = {"archived": archived, "deleted": deleted, "photos": len(paths)}
     await audit.log(db, None, "account.erased", {"type": "business", "id": business_id}, summary,

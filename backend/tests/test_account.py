@@ -5,7 +5,7 @@ import auth
 import storage_client
 from conftest import Shop, photo_b64, run
 from db import get_db
-from routers import account
+from routers import account, files
 from test_auth import PIN, add_worker
 
 
@@ -53,8 +53,13 @@ def test_after_the_grace_period_gst_records_are_archived_and_the_rest_erased(cli
     _sell(other, other.product("Rose", 80, 5))
     photo = shop.post("/api/upload-base64", {"image_base64": photo_b64()}).json()["path"]
     assert storage_client._local_path(photo).exists()
+    logo = shop.post("/api/upload-base64", {"image_base64": photo_b64(), "kind": "logo"}).json()["path"]
+    public = [storage_client._local_path(k, storage_client.PUBLIC) for k in (logo, files.thumb_key(logo))]
+    assert all(f.exists() for f in public)  # WP-7: a logo and its thumbnail go to the public store
     bid = shop.get("/api/auth/me").json()["business"]["id"]
     db = get_db()
+    run(db.summary_schedule.update_one({"_id": bid}, {"$set": {"due": datetime.now(timezone.utc), "day": "x"}},
+                                       upsert=True))  # WP-5's row, keyed by the shop id
     assert _delete(client, shop.h, password="secret123").status_code == 200
     assert run(account.erase_due(db)) == []  # still in the grace period
     later = datetime.now(timezone.utc) + timedelta(days=account.GRACE_DAYS, minutes=1)
@@ -63,6 +68,9 @@ def test_after_the_grace_period_gst_records_are_archived_and_the_rest_erased(cli
         assert run(db[coll].count_documents({"business_id": bid})) == 0, coll
     assert run(db.businesses.find_one({"id": bid})) is None
     assert not storage_client._local_path(photo).exists()
+    assert not any(f.exists() for f in public)
+    assert run(db.summary_schedule.find_one({"_id": bid})) is None
+    assert run(db.daily_sales.count_documents({"business_id": bid})) == 0  # WP-2's rollups
     archived = run(db.gst_archive.find({"business_id": bid}, {"_id": 0}).to_list(100))
     kinds = sorted({a["kind"] for a in archived})
     assert kinds == ["business", "invoices", "stock_history"]
