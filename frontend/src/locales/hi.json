@@ -591,7 +591,6 @@
   "Please enter a valid 10-digit mobile number.": "कृपया सही 10 अंकों का मोबाइल नंबर डालें।",
   "An account with this phone number already exists. Please log in instead.": "इस फ़ोन नंबर से खाता पहले से है। कृपया लॉग इन करें।",
   "Incorrect phone number or password.": "फ़ोन नंबर या पासवर्ड ग़लत है।",
-  "Too many incorrect attempts. Please wait 10 minutes, or ask the shop owner to reset your PIN.": "कई बार ग़लत कोशिश हुई। कृपया 10 मिनट रुकें, या दुकान के मालिक से पिन दोबारा बनवाएँ।",
   "This login has been turned off.": "यह लॉगिन बंद कर दिया गया है।",
   "The current password is incorrect.": "मौजूदा पासवर्ड ग़लत है।",
   "Please use at least 8 characters.": "कृपया कम से कम 8 अक्षर रखें।",
@@ -761,5 +760,16 @@
   "Give back {{amount}}": "{{amount}} वापस दें",
   "Collect {{amount}} more": "{{amount}} और लें",
   "Nothing to give back or collect": "न कुछ वापस देना, न लेना",
-  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।"
+  "Too many attempts. Please try again in {{seconds}} seconds.": "बहुत बार कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।",
+  "The server is busy. Please try again in a few seconds.": "सर्वर अभी व्यस्त है। कृपया कुछ सेकंड बाद फिर कोशिश करें।",
+  "Please use a PIN of at least {{n}} digits.": "कृपया कम से कम {{n}} अंकों का पिन रखें।",
+  "This PIN is too easy to guess. Please choose another.": "यह पिन बहुत आसानी से अंदाज़ा लगाया जा सकता है। कृपया कोई दूसरा पिन चुनें।",
+  "Too many incorrect attempts. Please try again in {{minutes}} minutes.": "कई बार ग़लत कोशिश हुई। कृपया {{minutes}} मिनट बाद फिर कोशिश करें।",
+  "Too many incorrect attempts. Please try again in {{seconds}} seconds.": "कई बार ग़लत कोशिश हुई। कृपया {{seconds}} सेकंड बाद फिर कोशिश करें।",
+  "Google sign-in is not available right now. Please try again later.": "Google से लॉग इन अभी नहीं हो पा रहा है। कृपया थोड़ी देर बाद फिर कोशिश करें।",
+  "Please sign in with Google again to confirm.": "पक्का करने के लिए कृपया Google से दोबारा लॉग इन करें।",
+  "This is not the Google account you log in with.": "यह वह Google खाता नहीं है जिससे आप लॉग इन करते हैं।",
+  "This shop is being deleted. Please contact the shop owner.": "यह दुकान हटाई जा रही है। कृपया दुकान के मालिक से संपर्क करें।",
+  "This shop has been deleted.": "यह दुकान हटा दी गई है।",
+  "Phone verification is not available yet.": "फ़ोन नंबर की जाँच अभी उपलब्ध नहीं है।"
 }
