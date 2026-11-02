@@ -784,5 +784,12 @@
   "This is not the Google account you log in with.": "यह वह Google खाता नहीं है जिससे आप लॉग इन करते हैं।",
   "This shop is being deleted. Please contact the shop owner.": "यह दुकान हटाई जा रही है। कृपया दुकान के मालिक से संपर्क करें।",
   "This shop has been deleted.": "यह दुकान हटा दी गई है।",
-  "Phone verification is not available yet.": "फ़ोन नंबर की जाँच अभी उपलब्ध नहीं है।"
+  "Phone verification is not available yet.": "फ़ोन नंबर की जाँच अभी उपलब्ध नहीं है।",
+  "Please enter your shop's GST number.": "कृपया अपनी दुकान का GST नंबर डालें।",
+  "{{gstin}} is not a valid GST number. Please check it on your GST certificate.": "{{gstin}} सही GST नंबर नहीं है। कृपया इसे अपने GST सर्टिफ़िकेट से मिलाएँ।",
+  "Your shop is GST registered but has no GST number. Please add it in Shop details.": "आपकी दुकान GST में रजिस्टर्ड है, पर उसका GST नंबर नहीं डला है। कृपया इसे दुकान की जानकारी में जोड़ें।",
+  "The GST number saved for your shop is not valid. Please correct it in Shop details.": "आपकी दुकान का सेव किया गया GST नंबर सही नहीं है। कृपया इसे दुकान की जानकारी में ठीक करें।",
+  "{{hsn}} is not a valid HSN or SAC code. It has 4, 6 or 8 digits.": "{{hsn}} सही HSN या SAC कोड नहीं है। इसमें 4, 6 या 8 अंक होते हैं।",
+  "An exempt category has 0% GST. Set its GST to 0% or turn off Exempt.": "टैक्स-छूट वाली कैटेगरी पर GST 0% होता है। उसका GST 0% करें या छूट बंद करें।",
+  "Please upload the logo again.": "कृपया लोगो फिर से अपलोड करें।"
 }
