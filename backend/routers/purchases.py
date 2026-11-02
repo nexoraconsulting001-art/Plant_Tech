@@ -12,10 +12,11 @@ from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
 
 import auth
+import catalog_search
 from common import new_id, now_iso
 from db import get_db, in_transaction
 from errors import AppError
-from routers import library, suppliers
+from routers import library, products, suppliers
 from routers.business import DEFAULT_PROFIT_PERCENT
 from routers.carts import MAX_PRICE, MAX_QTY
 from stock import history_row, notify_after, settle_stock, write_history
@@ -77,6 +78,7 @@ async def create_purchase(body: PurchaseIn, user: dict = Depends(auth.require("s
     markup = 1 + shop.get("profit_percent", DEFAULT_PROFIT_PERCENT) / 100
     library_ids = [None if it.product_id else await library.entry_for_new_product(db, it.name, None, bid)
                    for it in body.items]
+    entries = await catalog_search.library_images(db, [{"library_id": lid} for lid in library_ids])  # for search keys
     reason = f"Supplier bill {body.invoice_number}"
     purchase_id = new_id()
 
@@ -96,16 +98,13 @@ async def create_purchase(body: PurchaseIn, user: dict = Depends(auth.require("s
                 rows.append(history_row(user, p, it.quantity, p["stock"], "purchase", reason))
                 changes.append((p, p["stock"] - it.quantity, p["stock"]))
             else:
-                # TODO(WP-3 merge): take the SKU from WP-3's counter helper once it lands (unique {business_id, sku}).
-                count = await db.products.count_documents({"business_id": bid}, session=session)
-                p = {"id": new_id(), "business_id": bid, "sku": f"NP-{count + 1:04d}", "name": it.name.strip(),
+                p = {"id": new_id(), "business_id": bid, "name": it.name.strip(),
                      "botanical_name": "", "category_id": it.category_id, "library_id": library_id, "photo_path": None,
                      "selling_price": it.selling_price if it.selling_price is not None else round(it.purchase_price * markup),
                      "cost_price": it.purchase_price if owner else 0, "stock": it.quantity, "min_stock": 5,
                      "supplier": supplier_name, "notes": "", "unit": "pcs", "deleted_at": None, "created_at": now_iso(),
                      "created_by": user["id"]}
-                await db.products.insert_one(p, session=session)
-                p.pop("_id", None)
+                p = await products.insert_product(db, p, entries.get(library_id), session=session)  # code + search keys
                 rows.append(history_row(user, p, it.quantity, it.quantity, "purchase", reason))
                 changes.append((p, 0, it.quantity))
         await write_history(db, rows, session)

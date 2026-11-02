@@ -115,24 +115,28 @@ async def _check_category(db, user: dict, category_id: str | None) -> dict | Non
     return cat
 
 
-async def next_sku(db, business_id: str) -> str:
+async def next_sku(db, business_id: str, session=None) -> str:
     """The shop's next product code from its counter: NP-0001, NP-0002…"""
     c = await db.counters.find_one_and_update({"_id": f"sku:{business_id}"}, {"$inc": {"seq": 1}}, upsert=True,
-                                              return_document=ReturnDocument.AFTER)
+                                              return_document=ReturnDocument.AFTER, session=session)
     return f"NP-{c['seq']:04d}"
 
 
-async def insert_product(db, doc: dict, entry: dict | None) -> dict:
+async def insert_product(db, doc: dict, entry: dict | None, session=None) -> dict:
     """Insert a new product (without `sku`) with the next free code and its search keys; returns it.
-    Supplier bills and demo data should use this too (they still count products for the code)."""
+    Every new product goes through here (products, supplier bills, demo data). Inside a transaction (`session`)
+    a taken code can't be retried (the error ends the transaction), so it is raised; migration 0302 has moved
+    every counter past the codes that were given out by counting."""
     for _ in range(SKU_TRIES):
-        doc = {**doc, "sku": await next_sku(db, doc["business_id"])}
+        doc = {**doc, "sku": await next_sku(db, doc["business_id"], session)}
         doc.update(catalog_search.keys_for(doc, entry))
         try:
-            await db.products.insert_one(doc)
+            await db.products.insert_one(doc, session=session)
             doc.pop("_id", None)
             return doc
         except DuplicateKeyError:  # a code given out by counting products: move the counter past them
+            if session is not None:
+                raise
             doc.pop("_id", None)
             n = await db.products.count_documents({"business_id": doc["business_id"]})
             await db.counters.update_one({"_id": f"sku:{doc['business_id']}"}, {"$max": {"seq": n}})
