@@ -321,7 +321,8 @@ def test_1000_shops_at_nine_pm(client, sent):
         await db.users.insert_many([{"id": f"u{i}", "business_id": f"b{i}", "role": "owner"} for i in range(n)])
         await db.push_tokens.insert_many([{"token": f"ExponentPushToken[load{i:06d}]", "user_id": f"u{i}",
                                            "business_id": f"b{i}", "lang": "en"} for i in range(n)])
-        await db.invoices.insert_many([{"id": f"i{i}-{k}", "business_id": f"b{i}", "date_key": day, "status": "Paid",
+        await db.invoices.insert_many([{"id": f"i{i}-{k}", "business_id": f"b{i}", "invoice_number": f"INV-{k + 1:04d}",
+                                        "date_key": day, "status": "Paid",
                                         "grand_total": 100.0 * (k + 1), "payment_method": "UPI" if k else "Cash"}
                                        for i in range(n) for k in range(3)])
         await db.products.insert_many([{"id": f"p{i}", "business_id": f"b{i}", "stock": 1, "min_stock": 2,
