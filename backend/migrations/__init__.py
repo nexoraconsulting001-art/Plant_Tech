@@ -12,7 +12,11 @@ runner finds the files by name, so there is no list to edit. Numbers per work pa
 - A lock document (`migration_lock`) lets only one runner work at a time; a second one waits for it, and a
   lock left by a runner that died is taken over once it expires.
 - A migration must be idempotent: if a runner stops half-way, the next run repeats it from the start.
-- Migrations run without the 10 s per-operation limit the app uses (index builds on big collections are slow).
+- Migrations run without the 5 s per-operation limit the app uses (index builds on big collections are slow).
+  The lock is renewed every minute while one runs, so a long one never loses it to a second runner.
+- Changing many documents: walk the collection once with `walk` (batches in _id order, each one short query
+  after the last _id), never "find the ones still to do, limit N" in a loop: that scans the done ones again for
+  every batch (migration 0401 took 48 minutes on 2 million customers that way).
 """
 import asyncio
 import importlib
@@ -28,6 +32,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 import pymongo
+from pymongo.asynchronous.collection import AsyncCollection
 from pymongo.errors import DuplicateKeyError
 
 from settings import get_settings
@@ -38,6 +43,8 @@ NAME = re.compile(r"^(\d{4})_[a-z0-9_]+$")
 LOCK_ID = "lock"
 LOCK_TTL = timedelta(minutes=15)  # renewed after each migration; a dead runner's lock is free after this
 STEP_TIMEOUT = 3600  # seconds one migration may take
+RENEW_EVERY = 60  # seconds between two renewals of the lock while a migration runs
+WALK_BATCH = 1000
 
 
 @dataclass(frozen=True)
@@ -108,6 +115,38 @@ async def _release(db, owner: str):
     await db.migration_lock.delete_one({"_id": LOCK_ID, "owner": owner})
 
 
+async def _keep_lock(db, owner: str):
+    """Renews the lock every RENEW_EVERY seconds until cancelled (a migration may take longer than LOCK_TTL)."""
+    while True:
+        await asyncio.sleep(RENEW_EVERY)
+        try:
+            with pymongo.timeout(30):
+                await _renew(db, owner)
+        except Exception as e:
+            log.warning("could not renew the migration lock: %s", e)
+
+
+async def walk(coll, query: dict, projection: dict, batch: int = WALK_BATCH):
+    """The documents of `coll` matching `query`, in lists of up to `batch`, each read once: in _id order, every
+    batch one short query for the next `batch` matches after the last _id (an index scan on _id, hinted, so the
+    planner never sorts the whole collection), so no cursor stays open while the caller writes. Writes that make a
+    document stop matching don't change where the walk goes on. Documents of one collection must have _ids of one
+    type (ObjectIds here, insert_one's default): $gt only compares values of the same type."""
+    last = None
+    while True:
+        q = query if last is None else {"$and": [query, {"_id": {"$gt": last}}]}
+        cursor = coll.find(q, {**projection, "_id": 1}).sort("_id", 1).limit(batch)
+        if isinstance(coll, AsyncCollection):  # the in-memory dev database has no hints
+            cursor = cursor.hint([("_id", 1)])
+        docs = await cursor.to_list(batch)
+        if not docs:
+            return
+        yield docs
+        if len(docs) < batch:
+            return
+        last = docs[-1]["_id"]
+
+
 async def up(db, *, wait: float = 300) -> list[str]:
     """Apply every pending migration in order, under the lock. Returns the ids applied (none: already done)."""
     migrations = discover()
@@ -115,6 +154,7 @@ async def up(db, *, wait: float = 300) -> list[str]:
     with pymongo.timeout(STEP_TIMEOUT):
         await _acquire(db, owner, wait)
     ran = []
+    keeper = asyncio.create_task(_keep_lock(db, owner))
     try:
         for m in migrations:
             with pymongo.timeout(STEP_TIMEOUT):
@@ -131,6 +171,7 @@ async def up(db, *, wait: float = 300) -> list[str]:
             log.info("migration %s: done in %d ms", m.id, took)
             ran.append(m.id)
     finally:
+        keeper.cancel()
         with pymongo.timeout(30):
             await _release(db, owner)
     return ran
