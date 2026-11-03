@@ -36,7 +36,7 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
   - **OTA updates:** runtime is `appVersion`, so updates to channel `staging` now reach only 1.1.0 phones. Still no OTA or build without the owner's go.
   - **Since the push notifications commit (Nov) the app is 1.2.0 (versionCode 3):** it adds native modules, so its updates must never reach 1.1.0 phones. The next QA step is a 1.2.0 build, not an OTA.
   - **How to build:** `npx eas-cli@latest build --profile staging --platform android --non-interactive --no-wait` from `frontend/` (logged in as the owner's Expo account; run it from PowerShell, the Bash sandbox blocks network).
-- **Backend tests:** pytest with mongomock (67 passing).
+- **Backend tests:** pytest against a real MongoDB replica set (`MONGO_URL=mongodb://127.0.0.1:27117/?replicaSet=rs0`; transactions need one), run from Git Bash so `tests/test_ops.py` runs too. On `prod-ready`: 440 tests, 438 pass, 2 skipped (`RUN_BENCH=1`, real Redis). `ruff check .` clean.
 - **App checks:** `npx tsc --noEmit`, `npx eslint app src` (warnings only, no errors) and `npm run i18n:check`. The package manager is yarn 1 (`npx yarn@1.22.22 add …`; `npx expo install` fails without yarn on PATH).
 
 ## Done this session (owner's 12-point feedback + supplier master; one commit per phase on `staging`)
@@ -71,6 +71,17 @@ bills can be corrected for 7 days; decimals by product unit, never for plants.
 - 163318b review fixes; app is now 1.2.0 (versionCode 3).
 - Checked in the local browser on 2 Nov: 40 pcs typed, below-stock warnings and "Bill anyway", two UPI IDs and the QR picker, WhatsApp auto-open, Correct bill (INV-0424 → INV-0425), give-back amount, Notifications screen.
 - Not checked yet: a phone (push needs Firebase + a 1.2.0 build), the employee view in the browser, Hindi on the new screens.
+
+## Production readiness and scale (Nov 2026, local branch `prod-ready`, not pushed)
+Owner's ask: production-ready with standard tools, sized for 1000 nurseries x 200 bills a day (peak ~14 bills/s,
+~250 requests/s). Branch `prod-ready` (from `staging`) holds the 14 work packages, the review fixes and the
+load-test fixes; `docs/PRODUCTION-PLAN.md` has the full status, the owner decisions D1–D17 still open and the
+cost by phase. Nothing is pushed, deployed or built.
+- **Load test:** `loadtest/` (locust and k6, `seed.py` for 1000 shops). Laptop runs on 3 Nov after the fixes:
+  1x had 0 errors and bills p95 520 ms; 3x shed load with fast 503 `busy` and recovered at once. A capacity number
+  still needs k6 from a separate machine against staging-sized hardware.
+- **App checks the way CI runs them:** `npx eslint app src`, and `tsc` with a stale `.expo/types/router.d.ts`
+  moved aside; Node tests `node --test --experimental-transform-types tests/*.test.mjs scripts/test-paging.mjs`.
 
 ## Open items for next session
 1. **Phone checks on the 1.1.0 QA APK** (the owner is installing it): QA sections O (crop: dragging, photos taken sideways come out upright, back button), I.11–I.13 (bottom buttons, sheets, keyboard), M.6–M.11 (bill pages taken one after another with the camera), S (suppliers) and T (Hindi; especially T.7, no clipped vowel marks at the largest font). Fix whatever the owner reports.
