@@ -6,6 +6,8 @@ header, made up when the client sent none, and returned in the response), plus `
 the request's login is known (`bind_user`, called by auth.current_user). Every request ends with one "request"
 line: method, route template (never the raw path, so bill tokens stay out of logs), status and duration.
 
+Tracebacks in logs never include local variables (JSON_TRACEBACKS, and plain ones on the console).
+
 Errors: Sentry when SENTRY_DSN is set; release = GIT_SHA, environment = ENV. No personal data is sent: no
 request bodies, query strings, cookies or local variables; tokens, passwords and phone numbers are scrubbed.
 
@@ -26,6 +28,7 @@ import structlog
 from asgi_correlation_id import correlation_id
 from fastapi import Depends, HTTPException, Request
 from sentry_sdk.scrubber import DEFAULT_DENYLIST, DEFAULT_PII_DENYLIST, EventScrubber
+from structlog.tracebacks import ExceptionDictTransformer
 
 from settings import Settings, get_settings
 
@@ -47,6 +50,13 @@ def _dumps(obj, **_kw) -> str:
     return orjson.dumps(obj, default=str).decode()
 
 
+# Tracebacks never carry local variables (passwords, PINs, phone numbers, tokens; and slow: rich printed ~8,600
+# lines and spent ~10 s of CPU per traceback in the load test, which froze an overloaded worker). structlog's own
+# defaults show them: `dict_tracebacks` (SHOW_LOCALS = True in structlog.tracebacks) and the console's rich
+# formatter. So the JSON lines get the same dict tracebacks without "locals", and the console plain Python ones.
+JSON_TRACEBACKS = structlog.processors.ExceptionRenderer(ExceptionDictTransformer(show_locals=False))
+
+
 def setup_logging(s: Settings | None = None):
     """JSON lines (or console text in dev) for structlog and the standard logging module. Safe to call again."""
     s = s or get_settings()
@@ -54,10 +64,10 @@ def setup_logging(s: Settings | None = None):
     shared = [structlog.contextvars.merge_contextvars, structlog.stdlib.add_log_level, structlog.stdlib.add_logger_name,
               _add_request, structlog.processors.TimeStamper(fmt="iso", utc=True)]
     if as_json:
-        render = [structlog.processors.dict_tracebacks, structlog.processors.EventRenamer("message"),
+        render = [JSON_TRACEBACKS, structlog.processors.EventRenamer("message"),
                   structlog.processors.JSONRenderer(serializer=_dumps)]
     else:
-        render = [structlog.dev.ConsoleRenderer(colors=False)]
+        render = [structlog.dev.ConsoleRenderer(colors=False, exception_formatter=structlog.dev.plain_traceback)]
     structlog.configure(processors=[*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
                         logger_factory=structlog.stdlib.LoggerFactory(), wrapper_class=structlog.stdlib.BoundLogger,
                         cache_logger_on_first_use=True)
