@@ -93,9 +93,11 @@ def view(p: dict, cats: dict, lib: dict, gst_registered: bool, user: dict) -> di
     return v
 
 
-async def views(db, user: dict, products: list[dict]) -> list[dict]:
+async def views(db, user: dict, products: list[dict], lib: dict | None = None) -> list[dict]:
+    """`lib`: the products' library entries when the caller already read them (catalog_search.find_products)."""
     cats, gst = await context(db, user["business_id"])
-    lib = await library_images(db, products)
+    if lib is None:
+        lib = await library_images(db, products)
     return [view(p, cats, lib, gst, user) for p in products]
 
 
@@ -175,8 +177,9 @@ async def list_products(search: str = "", category_id: str = "", low: bool = Fal
         where.update(LOW)
     paged = limit is not None or bool(cursor)
     if search.strip():
-        found = await catalog_search.find_products(db, user["business_id"], search, limit or SEARCH_MAX, where)
-        items = await views(db, user, found)
+        lib: dict = {}
+        found = await catalog_search.find_products(db, user["business_id"], search, limit or SEARCH_MAX, where, lib)
+        items = await views(db, user, found, lib)
         return {"items": items, "next_cursor": None} if paged else items
     q = {**where, "business_id": user["business_id"], "deleted_at": None}
     if not paged:

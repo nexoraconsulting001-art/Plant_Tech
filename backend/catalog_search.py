@@ -6,19 +6,26 @@ starting with it) and ranks those with search_score, the same ranking as when ev
 `own_keys` (the product's own names only) is kept beside them, so an entry's new names can be merged in
 (library.refresh_products). Product reads use FIELDS so the keys never leave the database.
 
-Products inserted by code that does not fill the keys yet (supplier bills, demo data) get them on the next
-search in their shop (`index_unkeyed`); setting `keys_for(...)` on the insert skips that.
+Every writer of products sets the keys: routers/products.insert_product (new products, supplier bills, demo
+data), update_product (renames), delete_product (none), library.refresh_products (an entry's new names), migration
+0303 (all existing ones) and loadtest/seed.py. Only an older server version writes products without them (the
+old version billing while a deploy migrates, or a rollback). For those, `index_unkeyed` fills a shop's products
+without keys at most once every UNKEYED_EVERY seconds per shop and process, from its search (it used to run
+before every search: one more query per keystroke). Such a product is found at the latest that long after the
+newer version serves again.
 """
 from bson.regex import Regex
 from pymongo import UpdateOne
 
-from common import name_key
+from common import Throttle, name_key
 from routers import library
-from search import exact_keys, prefixes, product_keys, product_terms, query_forms, search_score
+from search import exact_keys, prefixes, product_keys, product_terms, query_forms, score_of, term_forms
 
 LIMIT = 30
 FIELDS = {"_id": 0, "own_keys": 0, "search_keys": 0}
 UNKEYED_BATCH = 500
+UNKEYED_EVERY = 300  # seconds between two checks of one shop for products without keys, per process
+unkeyed_checked = Throttle(UNKEYED_EVERY)
 
 
 async def library_images(db, products: list[dict]) -> dict:
@@ -56,20 +63,33 @@ async def index_unkeyed(db, business_id: str) -> int:
     return len(todo)
 
 
-async def search_products(db, products: list[dict], query: str) -> list[dict]:
-    """These products ranked for what was typed, in English, Hindi or Hinglish; best matches first."""
-    lib = await library_images(db, products)
-    scored = [(s, p) for p in products if (s := search_score(query, product_terms(p, lib.get(p.get("library_id")))))]
+async def search_products(db, products: list[dict], query: str, lib: dict | None = None) -> list[dict]:
+    """These products ranked for what was typed, in English, Hindi or Hinglish; best matches first. `lib`: their
+    library entries when the caller has them (library_images), else they are read here.
+    search_score for each product, with the query's forms worked out once (search.score_of)."""
+    if lib is None:
+        lib = await library_images(db, products)
+    qk, qp = query_forms(query)
+    scored = [(s, p) for p in products
+              if (s := score_of(qk, qp, term_forms(product_terms(p, lib.get(p.get("library_id"))))))]
     scored.sort(key=lambda sp: (-sp[0], sp[1]["name"].lower()))
     return [p for _, p in scored]
 
 
-async def find_products(db, business_id: str, query: str, limit: int = LIMIT, where: dict | None = None) -> list[dict]:
-    """The shop's best `limit` products for what was typed. `where` adds filters (category, low stock, ids)."""
+async def find_products(db, business_id: str, query: str, limit: int = LIMIT, where: dict | None = None,
+                        lib: dict | None = None) -> list[dict]:
+    """The shop's best `limit` products for what was typed. `where` adds filters (category, low stock, ids).
+    Pass a dict as `lib` to get the library entries of the products found (for products.views, so it does not
+    read them again)."""
     qk, qp = query_forms(query)
     if not qk:
         return []
-    await index_unkeyed(db, business_id)
+    if unkeyed_checked.due(business_id):
+        try:
+            await index_unkeyed(db, business_id)
+        except BaseException:
+            unkeyed_checked.forget(business_id)  # try again on the next search
+            raise
     base = {**(where or {}), "business_id": business_id, "deleted_at": None}
     found: dict[str, dict] = {}
 
@@ -81,7 +101,11 @@ async def find_products(db, business_id: str, query: str, limit: int = LIMIT, wh
     await take([Regex("^" + p) for p in prefixes(qk, qp, own=True)])
     if len(found) < limit:
         await take([Regex("^" + p) for p in prefixes(qk, qp, own=False)])
-    return (await search_products(db, list(found.values()), query))[:limit]
+    candidates = list(found.values())
+    entries = await library_images(db, candidates)
+    if lib is not None:
+        lib.update(entries)
+    return (await search_products(db, candidates, query, entries))[:limit]
 
 
 async def suggest(db, business_id: str, q: str) -> tuple[list[dict], list[dict]]:

@@ -5,8 +5,11 @@ Search uses fields kept next to the name and phone, each searched from its start
 - `name_key`: the name in lower case without punctuation ("Meena  Gupta." -> "meena gupta"); lists are sorted by it.
 - `name_words`: the name from each word on ("meena gupta", "gupta"), so a surname finds the customer too.
 - `phone10` and `phone10_rev`: the 10 digits, and reversed, so the first or the last digits find the number.
-`search_fields(name, phone)` makes them; whoever writes a customer's name or phone sets them too. Customers saved
-by code that doesn't yet (sales.py before its customer upsert, demo data) get them on the next search.
+`search_fields(name, phone)` makes them; whoever writes a customer's name or phone sets them too (create, update,
+erase here; a bill's new customer in sales.py; demo_data.py; migration 0401 for older ones; loadtest/seed.py).
+Only an older server version (during a deploy, or after a rollback) saves customers without them: a shop's list
+or search fills those in at most once every FILL_EVERY seconds per process (it used to be one more query on
+every keystroke).
 """
 import base64
 import binascii
@@ -20,7 +23,7 @@ from pymongo.errors import DuplicateKeyError
 
 import audit
 import auth
-from common import name_key, new_id, normalize_in_phone, now_iso
+from common import Throttle, name_key, new_id, normalize_in_phone, now_iso
 from db import get_db, in_transaction
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
@@ -32,6 +35,8 @@ LIST_MAX = 5000  # the old, unpaged list (apps up to 1.2.0 load it whole)
 PAGE = 50
 FIND_MAX = 20
 ERASED_NAME = "Erased customer"
+FILL_EVERY = 300  # seconds between two checks of one shop for customers without search fields, per process
+fill_checked = Throttle(FILL_EVERY)
 
 
 class CustomerIn(BaseModel):
@@ -94,7 +99,18 @@ def _search(text: str) -> list[dict] | None:
 
 
 async def _fill_search_fields(db, business_id: str):
-    """Customers saved without search fields get them (one indexed look-up; nothing to do once every writer sets them)."""
+    """Customers saved without search fields get them (one indexed look-up, at most once every FILL_EVERY seconds
+    per shop and process; nothing to do once every writer sets them)."""
+    if not fill_checked.due(business_id):
+        return
+    try:
+        await _fill_now(db, business_id)
+    except BaseException:
+        fill_checked.forget(business_id)
+        raise
+
+
+async def _fill_now(db, business_id: str):
     todo = await db.customers.find({"business_id": business_id, "name_key": None},
                                    {"_id": 0, "id": 1, "name": 1, "phone": 1}).to_list(1000)
     for c in todo:  # a few at most (the customers saved since the last search); the migration filled the rest

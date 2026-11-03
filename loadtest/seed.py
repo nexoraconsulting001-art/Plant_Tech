@@ -65,7 +65,9 @@ def customer_phone(shop: int, j: int) -> str:
 
 def shop_docs(i: int, products: int, customers: int, password_hash: str, now: str):
     """(business, owner, categories, products, customers) of load-test shop number i, as the API would write them."""
+    from catalog_search import keys_for
     from common import name_key, new_id
+    from routers.customers import search_fields
 
     bid = new_id()
     phone = owner_phone(i)
@@ -94,9 +96,12 @@ def shop_docs(i: int, products: int, customers: int, password_hash: str, now: st
             "selling_price": price, "cost_price": round(price * 0.45), "stock": 100000, "min_stock": 5,
             "supplier": "", "notes": "", "unit": "pcs",
             "deleted_at": None, "created_at": now, "created_by": owner["id"], "loadtest": True})
+        prods[-1].update(keys_for(prods[-1], None))  # search keys, as insert_product sets them
     custs = [{"id": new_id(), "business_id": bid, "name": f"{FIRST[j % len(FIRST)]} {LAST[(j // len(FIRST)) % len(LAST)]}",
               "phone": customer_phone(i, j), "email": "", "address": "", "notes": "", "total_purchases": 0.0,
               "purchase_count": 0, "created_at": now, "loadtest": True} for j in range(customers)]
+    for c in custs:  # search fields, as create_customer sets them
+        c.update(search_fields(c["name"], c["phone"]))
     return business, owner, cats, prods, custs
 
 

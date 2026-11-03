@@ -5,6 +5,7 @@ turned into Latin letters, then both sides are reduced to a rough sound-alike fo
 names uses whole words, never parts of words: "Pot" is not "Pothos" and "Rose" is not "Primrose".
 """
 import re
+from functools import lru_cache
 
 from common import name_key
 
@@ -103,9 +104,19 @@ def search_score(query: str, terms: list[str]) -> int:
     return score_of(name_key(query), phonetic(query), term_forms(terms))
 
 
+FORMS_CACHED = 100_000  # names; a few MB. The same product and library names come back on every search.
+
+
+@lru_cache(maxsize=FORMS_CACHED)
+def forms_of(term: str) -> tuple[str, str]:
+    """(name key, sound-alike) of one name. Both are pure functions of the text, so the cache changes no result;
+    it saves the transliteration and the sound-alike rules on every search (a tenth of the API's CPU before)."""
+    return name_key(term), phonetic(term)
+
+
 def term_forms(terms: list[str]) -> list[tuple[str, str]]:
-    """(name key, sound-alike) of each term, worked out once (the cached library keeps these)."""
-    return [(name_key(t), phonetic(t)) if t else ("", "") for t in terms]
+    """(name key, sound-alike) of each term (the cached library keeps these)."""
+    return [forms_of(t) if t else ("", "") for t in terms]
 
 
 def score_of(qk: str, qp: str, forms: list[tuple[str, str]]) -> int:

@@ -1,7 +1,9 @@
-"""Small shared helpers: ids, India time, Indian mobile numbers, money."""
+"""Small shared helpers: ids, India time, Indian mobile numbers, money, a per-process throttle."""
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+
+from cachetools import TTLCache
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -39,6 +41,28 @@ def normalize_in_phone(raw: str | None) -> str | None:
 
 def money(x: float) -> float:
     return round(float(x) + 1e-9, 2)
+
+
+class Throttle:
+    """Lets each key through at most once every `seconds` in this process, e.g. a safety-net check per shop that
+    should not cost a database call on every keystroke. One event loop per process, so no lock is needed."""
+
+    def __init__(self, seconds: float, maxsize: int = 50_000):
+        self._seen: TTLCache = TTLCache(maxsize=maxsize, ttl=seconds)
+
+    def due(self, key) -> bool:
+        """True (and the key is counted) when the key was not let through in the last `seconds`."""
+        if key in self._seen:
+            return False
+        self._seen[key] = True
+        return True
+
+    def forget(self, key=None):
+        """Let `key` (or every key) through again next time, e.g. after the check failed."""
+        if key is None:
+            self._seen.clear()
+        else:
+            self._seen.pop(key, None)
 
 
 def name_key(name: str) -> str:
