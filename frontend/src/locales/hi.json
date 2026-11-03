@@ -799,5 +799,15 @@
   "Please choose a valid date.": "कृपया सही तारीख़ चुनें।",
   "{{n}} bill lines have no HSN code. Set HSN codes on your categories before filing.": "{{n}} बिल लाइनों में HSN कोड नहीं है। रिटर्न भरने से पहले अपनी कैटेगरी में HSN कोड डालें।",
   "{{n}} bills were made without GST and are shown as exempt supplies. Ask your CA about them.": "{{n}} बिल बिना GST के बने थे, इसलिए छूट वाली सप्लाई में दिखाए गए हैं। इनके बारे में अपने CA से पूछें।",
-  "{{n}} bills of this month were cancelled after the month ended. If the return is already filed, ask your CA about an amendment.": "इस महीने के {{n}} बिल महीना ख़त्म होने के बाद रद्द हुए। अगर रिटर्न भरा जा चुका है, तो उसमें सुधार (amendment) के बारे में अपने CA से पूछें।"
+  "{{n}} bills of this month were cancelled after the month ended. If the return is already filed, ask your CA about an amendment.": "इस महीने के {{n}} बिल महीना ख़त्म होने के बाद रद्द हुए। अगर रिटर्न भरा जा चुका है, तो उसमें सुधार (amendment) के बारे में अपने CA से पूछें।",
+  "The network is slow. Please try again.": "नेटवर्क धीमा है। कृपया फिर कोशिश करें।",
+  "Saved order added": "सेव किया ऑर्डर जोड़ा गया",
+  "{{name}} had a saved order with {{items}}. They are now in this order.": "{{name}} का एक सेव किया ऑर्डर था ({{items}})। वे अब इस ऑर्डर में हैं।",
+  "No internet": "इंटरनेट नहीं है",
+  "The order is kept on this phone. Bills can be made when the internet is back.": "ऑर्डर इस फ़ोन में रखा है। इंटरनेट वापस आने पर बिल बन सकेंगे।",
+  "Bills can be sent when the internet is back.": "इंटरनेट वापस आने पर बिल भेजे जा सकेंगे।",
+  "Not saved. Try again": "सेव नहीं हुआ। फिर कोशिश करें",
+  "Not saved. The order is kept on this phone.": "सेव नहीं हुआ। ऑर्डर इस फ़ोन में रखा है।",
+  "No answer from the server": "सर्वर से जवाब नहीं आया",
+  "The bill may or may not have been made. Tap the payment again: it will not be billed twice.": "हो सकता है बिल बना हो, हो सकता है न बना हो। भुगतान फिर से टैप करें: बिल दो बार नहीं बनेगा।"
 }

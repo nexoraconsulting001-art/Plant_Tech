@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 
 import { upiLink, upiList, useBusiness } from "@/src/business";
 import { useCart } from "@/src/cart-context";
+import { NetStatus } from "@/src/components/net-status";
 import { CorrectionBanner } from "@/src/components/order-customer";
 import { OptionRow, Sheet } from "@/src/components/sheet";
 import { BottomBar, Button, Header, Icon, LoadingView, Screen, T } from "@/src/components/ui";
@@ -41,6 +42,7 @@ export default function OrderUpi() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ alignItems: "center", padding: spacing.lg, gap: spacing.lg }}>
+          <NetStatus />
           {!!cart.correcting && <View style={{ alignSelf: "stretch" }}><CorrectionBanner /></View>}
           <T v="body" color={colors.inkSoft} style={{ textAlign: "center" }}>{t("Show this code to the customer to scan with any UPI app.")}</T>
           <View style={{ padding: spacing.lg, borderRadius: radius.xl, borderWidth: 2, borderColor: colors.line, backgroundColor: colors.white }} testID="upi-qr">

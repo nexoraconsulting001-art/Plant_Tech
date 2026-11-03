@@ -2,20 +2,26 @@
 // WhatsApp and each customer's history is complete. Search, or add a new one. Picking a customer opens
 // their saved order if they have one (items added earlier, by anyone in the shop): see useStartOrder.
 // With ?change=1 (the "Change" on an order): the items move to the customer picked.
+// Calls: "Recent customers" (the empty search) is loaded at most every 30 minutes; each bill moves its customer to the
+// top of it on the phone (afterBill in order.ts). Typed searches go 300 ms after the last key; an overtaken one is
+// cancelled and the last results stay on screen meanwhile.
 import { useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useTranslation } from "react-i18next";
 
 import { apiGet, apiPost } from "@/src/api";
 import { OrderCustomer, useCart } from "@/src/cart-context";
+import { NetStatus } from "@/src/components/net-status";
 import { useToast } from "@/src/components/toast";
 import { Button, Field, Header, Icon, PhoneField, Screen, SearchBox, T } from "@/src/components/ui";
 import { useStartOrder } from "@/src/hooks/useStartOrder";
 import { formatPhone, normalizePhone, plural } from "@/src/format";
 import { colors, radius, spacing } from "@/src/theme";
+
+const RECENT_FOR_MS = 30 * 60_000;
 
 export default function OrderCustomerStep() {
   const { t } = useTranslation();
@@ -38,9 +44,11 @@ export default function OrderCustomerStep() {
     return () => clearTimeout(id);
   }, [typed]);
 
-  const found = useQuery<OrderCustomer[]>({ queryKey: ["customer-find", q], queryFn: () => apiGet(`/customers/find?q=${encodeURIComponent(q)}`) });
+  const found = useQuery<OrderCustomer[]>({ queryKey: ["customer-find", q],
+    queryFn: ({ signal }) => apiGet(`/customers/find?q=${encodeURIComponent(q)}`, { signal }),
+    placeholderData: keepPreviousData, ...(q ? {} : { staleTime: RECENT_FOR_MS, gcTime: RECENT_FOR_MS }) });
   const results = found.data ?? [];
-  const noMatch = !!q && found.isSuccess && !results.length;
+  const noMatch = !!q && found.isSuccess && !found.isPlaceholderData && !results.length;
 
   async function choose(c: OrderCustomer) {
     if (opening) return;
@@ -89,6 +97,7 @@ export default function OrderCustomerStep() {
           </View>
           <T v="title">{t("Who is buying?")}</T>
         </View>
+        <NetStatus />
         {!adding && (
           <SearchBox value={typed} onChangeText={setTyped} placeholder={t("Name or phone number")} autoFocus
             loading={found.isFetching} testID="customer-search" />
@@ -124,7 +133,7 @@ export default function OrderCustomerStep() {
                 </View>
               </Pressable>
               {noMatch && <T v="small">{t("No customer found with that name or number.")}</T>}
-              {!q && results.length > 0 && <T v="label">{t("Recent customers")}</T>}
+              {!q && !found.isPlaceholderData && results.length > 0 && <T v="label">{t("Recent customers")}</T>}
             </View>
           }
           renderItem={({ item: c }) => (
