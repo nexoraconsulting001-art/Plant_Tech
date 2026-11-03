@@ -567,3 +567,43 @@ Acceptance:
 - `C:/Users/ShashankJindal/OneDrive - Cubastion Consulting Pvt Ltd/Personal Use/Lets Go/Planteck/Nzone/deploy/compose.yaml`
 - `C:/Users/ShashankJindal/OneDrive - Cubastion Consulting Pvt Ltd/Personal Use/Lets Go/Planteck/Nzone/frontend/src/cart-context.tsx`
 - `C:/Users/ShashankJindal/OneDrive - Cubastion Consulting Pvt Ltd/Personal Use/Lets Go/Planteck/Nzone/frontend/src/order.ts`
+
+---
+
+## Status (2 Nov 2026)
+
+All fourteen Wave 1 packages are merged into `prod-ready` (in order WP-1 to WP-14, each with `--no-ff`), with integration commits between them for the seams they could not change themselves. Nothing is deployed. The backend suite passes on a local MongoDB replica set (373 tests: 371 pass, 2 skipped because they need `RUN_BENCH=1` or a real Redis). The app checks pass: `tsc`, eslint with 0 errors, `i18n:check` with 0 missing and 0 unused, and the two Node unit-test files. Running `python -m migrations up` twice on a fresh database changes nothing. Running every migration again on a seeded shop also changes nothing.
+
+Done = built and its acceptance checks pass here. Partly = built, but some acceptance checks need staging, a phone, a real Redis, or an owner's input.
+
+| WP | Status | What remains |
+|---|---|---|
+| WP-0 Platform foundation | Done (merged before Wave 1) | Run the 1.1.0 regression on staging. Check that a test error reaches Sentry with the release SHA once a DSN is set. |
+| WP-1 Sale integrity | Partly | k6 at 20 bills/s was never run. Locally, 20 bills at once across 10 shops reached p95 817 ms; run k6 on staging-sized hardware. The Orders bill search (`_filters` in `sales.py`) still uses an unanchored `$regex` within one shop's bills, so `test_no_unanchored_regex` still exempts `routers/sales.py`. Wave 2 items are still open: `gst.split` in `price_lines` and D6, walk-in bills (D10), and credit notes. |
+| WP-2 Reports and rollups | Done | `REPORTS_FROM_ROLLUPS` is off by default in the code. `deploy/.env.example` now sets it to 1, because `sales.py` applies the rollups inside each bill's transaction. Turn it on only after migration 0202 has run on that database. |
+| WP-3 Catalogue | Done | The suggest benchmark was measured locally only (p95 35 ms). |
+| WP-4 Customers and suppliers | Done | Searching by the middle of a name or number no longer matches; this is intended. The `sales.py` regex exemption is listed under WP-1. |
+| WP-5 Worker and notifications | Partly | Never run against a real Redis or arq worker. Prove on staging that the summary goes out exactly once, and that pushes and retries survive a restart. |
+| WP-6 AI cost and safety | Partly | The Haiku accuracy evaluation needs an eval set (200 plant photos, 50 bills) and decision D5. Prompt caching cannot take effect yet, because the shared system prompt (~350 tokens) is below the 512-token minimum. Set `AI_MONTHLY_BUDGET_USD` per decision D4. |
+| WP-7 Files, storage and CDN | Partly | No device check that 1.1.0 photos load through the redirect. Private scans are refused across shops only when the request carries a login. A public bucket and `PUBLIC_IMAGE_BASE_URL` need D1 (domain) and R2 set-up. |
+| WP-8 Auth and account security | Partly | The 100 logins/s figure is in-process only; it needs k6 with 4 workers. OTP is not enforced until D8 is decided and 1.1.0 is retired. Google confirmation on Delete account works once Google sign-in is set up in the app (`src/google.ts`). |
+| WP-9 GST and the tax invoice | Partly | The invoice template, HSN defaults and bill-number format need a CA's sign-off (D7). Bills now store HSN and the exempt flag per line (integration). `gst.split` in the bill and the "Bill without GST" decision (D6) are Wave 2. |
+| WP-10 Compliance data | Partly | GSTR-1 is checked only against a subset of an unofficial schema; GSTN publishes none. Have a CA test an upload in the offline tool. Retention only counts customers due for anonymising; it does not anonymise them yet (D9). |
+| WP-11 CI/CD, deploy, backups | Partly | The CI workflow, Trivy, gitleaks, k6, Caddy, age, rclone and Docker were never run here. Run the restore drill once and record its timing in `docs/RUNBOOK.md`. Make expo-doctor blocking once the Expo patches are current. A deploy with no gap needs a second API instance. |
+| WP-12 App reliability | Partly | Code done. Still to check on a phone: 16 calls or fewer per bill, and that a cart survives the app being killed. |
+| WP-13 App platform | Partly | A Gradle build must confirm the merged manifest has no READ_MEDIA permissions. Staged OTA by fingerprint can only be checked on EAS. The delete flow was tested against a local mock only; test it against staging. A production build is blocked until the domain (D1) exists, unless `ALLOW_IP_BACKEND_URL=1` is set. |
+| WP-14 App lists and images | Partly | Smooth scrolling with 20k customers on a low-end Android phone is not yet checked; it was checked in the browser only. Plant and product photos now go up at 1024 px (integration). Plant identification accuracy at 1024 px with Sonnet is not yet measured; to revert, pass no `longEdge` in the four callers. |
+
+Integration fixes made while merging, beyond the merges themselves:
+- Supplier bills and demo data create products through `products.insert_product`. Bill customers carry WP-4's search fields.
+- Job modules are registered in `worker.py`, and the daily crons are scheduled there: audit archive, retention, expired exports, and shop erasure (WP-8's `erase_due`). The exports router is mounted.
+- Shop erase also removes the shop's public photos and its summary row.
+- Tests and the dev server use 6-digit PINs, the admin flag and a GSTIN that passes the checksum. The flaky login-throttle test and the worker-cron test are fixed.
+- `deploy/.env.example` lists every new server setting, and `frontend/.env.example` lists the app's Sentry and legal-link variables. ruff's per-file exceptions are removed.
+- App:
+  - 6-digit PIN screens.
+  - GSTIN examples that pass the checksum.
+  - Plant and product photos at 1024 px.
+  - The Google `id_token` on Delete account.
+  - `check-i18n.js` now also reads the GST warnings.
+  - CI runs the app's unit tests.
