@@ -1,0 +1,12 @@
+# gitleaks settings for CI (.github/workflows/ci.yml, "Secret scan"): the built-in rules, plus the few places
+# that hold made-up values on purpose. A real secret is never allowed here: rotate it (docs/RUNBOOK.md) instead.
+# One false positive on a single line: end that line with a `gitleaks:allow` comment.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test fixtures and example settings: fake keys only"
+paths = [
+  '''^backend/tests/''',
+  '''(^|/)\.env\.example$''',
+]

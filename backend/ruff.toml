@@ -1,0 +1,15 @@
+# Lint settings for `ruff check` (CI: .github/workflows/ci.yml). Run from backend/: ruff check .
+# The classic pyflakes + syntax-error set: unused imports and names, undefined names, real mistakes.
+# Style rules are left out on purpose; the code keeps its own style (120 columns, short names such as `l`).
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E741"]  # `l` for a bill line is the house style
+
+[lint.per-file-ignores]
+# Unused imports in files other work packages own (WP-10 demo_data.py, suppliers.py). Drop these lines once
+# those files lose the imports; until then CI stays green without touching their files.
+"demo_data.py" = ["F401"]
+"routers/suppliers.py" = ["F401"]

@@ -1,15 +1,28 @@
-# Backend CI/CD: test, then deploy to the shared Oracle VM.
-#   push to staging -> https://nurserypos-staging.140-238-251-141.sslip.io
-#   push to main    -> https://nurserypos.140-238-251-141.sslip.io
-# The deploy key (secret NURSERYPOS_DEPLOY_KEY) is locked on the VM to a forced command
-# that can only run "staging" or "prod" (see deploy/ci-deploy); it never gets a shell.
+# Backend CI/CD: test, then deploy to the VM.
+#   push to staging -> GitHub Environment "staging"     (no approval; the QA server)
+#   push to main    -> GitHub Environment "production"  (waits for a required reviewer; set it up once in
+#                      Settings > Environments > production > Required reviewers, see docs/RUNBOOK.md)
+# The deploy key (secret NURSERYPOS_DEPLOY_KEY) is locked on the VM to a forced command that can only run
+# "staging" or "prod" (see deploy/ci-deploy); it never gets a shell. On the VM deploy/deploy.sh builds (or pulls)
+# the image, runs the migrations while the old version still serves, swaps web and worker, waits for /readyz and
+# puts the previous image back by itself if the new one does not come up.
+#
+# Addresses come from repository or environment variables (Settings > Secrets and variables > Variables), with
+# today's shared-VM values as the fallback, so nothing has to be set for staging to keep deploying:
+#   PUBLIC_URL            https://api.<domain> once the domain exists (decision D1)
+#   DEPLOY_HOST           the VM's address;  DEPLOY_KNOWN_HOSTS  its pinned "host ssh-ed25519 AAAA..." line
+#   STAGING_IMAGE_SOURCE  "ghcr": build the staging image here too (production always does); the VM pulls it
+#                         when its deploy/.env has IMAGE_SOURCE=ghcr
 name: Backend deploy
 
 on:
   push:
     branches: [staging, main]
-    paths: ["backend/**", "deploy/**", ".github/workflows/deploy.yml"]
+    paths: ["backend/**", "deploy/**", ".github/workflows/deploy.yml", ".github/workflows/ci.yml"]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -17,27 +30,73 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ruff and pytest on a real MongoDB replica set (the backend job of ci.yml)
+    uses: ./.github/workflows/ci.yml
+    with:
+      scope: backend-tests
+
+  image:
+    # arm64 image for the VM, pushed to GHCR tagged with the commit SHA (production always; staging when asked)
+    if: github.ref_name == 'main' || vars.STAGING_IMAGE_SOURCE == 'ghcr'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Image name (GHCR needs lower case)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hara-hisaab-api" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
         with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements*.txt
-      - run: pip install -r backend/requirements.txt -r backend/requirements-dev.txt
-      - name: Offline smoke test (fake Claude, in-memory Mongo)
-        working-directory: backend
-        run: python -m pytest -q
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: backend
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          build-args: GIT_SHA=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=api-arm64
+          cache-to: type=gha,scope=api-arm64,mode=max
 
   deploy:
-    needs: test
-    if: github.ref_name == 'main' || github.ref_name == 'staging'
-    runs-on: ubuntu-latest
+    needs: [test, image]
+    # the image job is skipped for staging unless STAGING_IMAGE_SOURCE=ghcr; a failed image build stops the deploy
+    if: >-
+      !cancelled() && needs.test.result == 'success' && needs.image.result != 'failure'
+      && (github.ref_name == 'main' || github.ref_name == 'staging')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      url: ${{ steps.site.outputs.url }}
+    # one deploy at a time per VM (staging and production share one today)
+    concurrency:
+      group: vm-${{ vars.DEPLOY_HOST || '140.238.251.141' }}
+      cancel-in-progress: false
     env:
       TARGET: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
-      SITE: ${{ github.ref_name == 'main' && 'https://nurserypos.140-238-251-141.sslip.io' || 'https://nurserypos-staging.140-238-251-141.sslip.io' }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST || '140.238.251.141' }}
+      # pinned host key of svc-agent (SHA256:Ea/CDbX1gZSMVazDLeRRg2xjr/J+7559WJl8D3YHSDA)
+      KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS || '140.238.251.141 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIbRpwV5dkKYlpMRf4pjYsUviDks7pqrOmQmHgBNbmA' }}
     steps:
+      - name: Public address
+        id: site
+        env:
+          URL: ${{ vars.PUBLIC_URL || (github.ref_name == 'main' && 'https://nurserypos.140-238-251-141.sslip.io' || 'https://nurserypos-staging.140-238-251-141.sslip.io') }}
+        run: echo "url=${URL%/}" >> "$GITHUB_OUTPUT"
       - name: Deploy over SSH
         env:
           DEPLOY_KEY: ${{ secrets.NURSERYPOS_DEPLOY_KEY }}
@@ -45,8 +104,16 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # pinned host key of svc-agent (SHA256:Ea/CDbX1gZSMVazDLeRRg2xjr/J+7559WJl8D3YHSDA)
-          echo "140.238.251.141 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIbRpwV5dkKYlpMRf4pjYsUviDks7pqrOmQmHgBNbmA" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes ubuntu@140.238.251.141 "$TARGET"
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The forced command accepts exactly "staging" or "prod"; the VM deploys the branch's newest commit.
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 \
+            "ubuntu@$DEPLOY_HOST" "$TARGET"
       - name: Public health check
-        run: curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "$SITE/health"
+        env:
+          SITE: ${{ steps.site.outputs.url }}
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "$SITE/health"
+          # /readyz (MongoDB and photo storage) where the server has it; a server older than WP-0 answers 404
+          code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 5 "$SITE/readyz" || true)
+          echo "readyz: $code"
+          [ "$code" = 200 ] || [ "$code" = 404 ]

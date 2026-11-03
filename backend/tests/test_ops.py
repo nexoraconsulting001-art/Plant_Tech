@@ -1,0 +1,249 @@
+"""WP-11 CI/CD and deploy: the workflows are well formed and pinned, and deploy/deploy.sh swaps, waits for /readyz
+and rolls back by itself. The deploy script runs for real against fake `docker`, `curl` and `git` commands (no
+Docker needed), so these tests run in CI and on a laptop with Git Bash."""
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = ROOT / ".github" / "workflows"
+DEPLOY = ROOT / "deploy"
+
+
+def _bash() -> str | None:
+    found = shutil.which("bash")
+    if not found or (sys.platform == "win32" and "system32" in found.lower()):  # WSL's launcher, not a shell
+        return None
+    return found
+
+
+BASH = _bash()
+needs_bash = pytest.mark.skipif(BASH is None, reason="needs bash (Git Bash on Windows)")
+
+
+def _workflow(name: str) -> dict:
+    return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+
+
+# --- workflows -------------------------------------------------------------------------------------------------
+
+def test_every_action_is_pinned_by_commit_sha():
+    uses = []
+    for f in WORKFLOWS.glob("*.yml"):
+        uses += [(f.name, u) for u in re.findall(r"^\s*-?\s*uses:\s*([^\s#]+)", f.read_text(encoding="utf-8"), re.M)]
+    assert uses
+    loose = [(f, u) for f, u in uses if not (u.startswith("./") or re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", u))]
+    assert loose == [], f"pin these by commit SHA: {loose}"
+
+
+def test_ci_runs_every_check_and_one_result_gates_the_merge():
+    ci = _workflow("ci.yml")
+    on = ci[True]  # PyYAML reads the key `on` as True
+    assert {"pull_request", "push", "workflow_call"} <= set(on)
+    jobs = ci["jobs"]
+    assert {"backend", "audit", "image", "secrets", "app", "result"} <= set(jobs)
+    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    for check in ("ruff check", "python -m pytest", "replSet rs0", "pip-audit", "trivy-action", "gitleaks",
+                  "tsc --noEmit", "eslint app src", "i18n:check", "expo-doctor"):
+        assert check in text, check
+    assert set(jobs["result"]["needs"]) == {"backend", "audit", "image", "secrets", "app"}
+    assert jobs["result"]["if"] == "always()"
+
+
+def test_deploy_tests_first_and_production_waits_for_a_reviewer():
+    wf = _workflow("deploy.yml")
+    jobs = wf["jobs"]
+    assert jobs["test"]["uses"] == "./.github/workflows/ci.yml"
+    assert jobs["test"]["with"]["scope"] == "backend-tests"
+    deploy = jobs["deploy"]
+    assert set(deploy["needs"]) == {"test", "image"}
+    assert "needs.test.result == 'success'" in deploy["if"]
+    assert "'production'" in deploy["environment"]["name"] and "'staging'" in deploy["environment"]["name"]
+    assert deploy["concurrency"]["cancel-in-progress"] is False
+    # the VM's installed forced command only accepts "staging" / "prod": the workflow must send exactly that
+    assert "TARGET: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}" in (WORKFLOWS / "deploy.yml").read_text()
+    assert wf[True]["push"]["branches"] == ["staging", "main"]
+
+
+def test_dependabot_covers_every_ecosystem():
+    cfg = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    assert {u["package-ecosystem"] for u in cfg["updates"]} == {"pip", "npm", "github-actions", "docker"}
+
+
+def test_no_hard_coded_app_key_left_in_docs():
+    for f in (ROOT / "README.md", DEPLOY / "README.md", DEPLOY / ".env.example", ROOT / "frontend" / ".env.example"):
+        text = f.read_text(encoding="utf-8")
+        for stale in ("X-App-Key", "APP_API_KEY", "EXPO_PUBLIC_APP_KEY"):  # the app-key check was removed
+            assert stale not in text, (f, stale)
+
+
+# --- shell scripts ---------------------------------------------------------------------------------------------
+
+@needs_bash
+@pytest.mark.parametrize("script", ["deploy.sh", "ci-deploy", "backup.sh", "restore-drill.sh", "demo-refresh.sh"])
+def test_scripts_parse(script):
+    r = subprocess.run([BASH, "-n", str(DEPLOY / script)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+@needs_bash
+def test_ci_deploy_runs_only_the_known_commands(tmp_path):
+    for target, folder in (("staging", "Plant_Tech-staging"), ("prod", "Plant_Tech")):
+        script = tmp_path / folder / "deploy" / "deploy.sh"
+        script.parent.mkdir(parents=True)
+        script.write_text('#!/usr/bin/env bash\necho "deploy.sh $*"\n', newline="\n")
+        script.chmod(0o755)
+    env = {**os.environ, "HOME": str(tmp_path)}
+    for command, expect in (("staging", "deploy.sh staging"), ("prod", "deploy.sh prod"),
+                            ("staging rollback", "deploy.sh staging rollback")):
+        r = subprocess.run([BASH, str(DEPLOY / "ci-deploy")], env={**env, "SSH_ORIGINAL_COMMAND": command},
+                           capture_output=True, text=True)
+        assert r.returncode == 0 and r.stdout.strip() == expect, (command, r.stdout, r.stderr)
+    for command in ("", "bash", "staging; rm -rf ~", "prod rollback 1234", "staging\nprod"):
+        r = subprocess.run([BASH, str(DEPLOY / "ci-deploy")], env={**env, "SSH_ORIGINAL_COMMAND": command},
+                           capture_output=True, text=True)
+        assert r.returncode == 1 and "refused" in r.stderr, command
+
+
+# Fake docker: images are files in $FAKE/tags (name -> image id); "compose up" makes the web container run
+# whatever :latest points at; "compose run ... migrate" exits with $MIGRATE_RC; every call is logged.
+FAKE_DOCKER = r"""#!/usr/bin/env bash
+echo "docker $*" >> "$FAKE/calls"
+T="$FAKE/tags"; mkdir -p "$T"
+key() { echo "$1" | tr '/:' '__'; }
+resolve() { case "$1" in sha256:*) echo "$1" ;; *) cat "$T/$(key "$1")" 2>/dev/null ;; esac; }
+if [ "$1" = compose ]; then
+  shift
+  case "$1" in
+    build) echo sha256:new > "$T/$(key "$PROJECT-api:latest")" ;;
+    config) printf 'mongo\nredis\ndata-owner\nmigrate\nweb\nworker\n' ;;
+    ps) [ -f "$FAKE/running" ] && echo cid-web ;;
+    run) case "$*" in *settings*) exit "${SETTINGS_RC:-0}" ;; *) exit "${MIGRATE_RC:-0}" ;; esac ;;
+    up) case "$*" in *mongo*) exit 0 ;; esac; resolve "$PROJECT-api:latest" > "$FAKE/running" ;;
+  esac
+  exit 0
+fi
+case "$1" in
+  inspect) cat "$FAKE/running" ;;
+  tag) id=$(resolve "$2"); [ -n "$id" ] || exit 1; echo "$id" > "$T/$(key "$3")" ;;
+  image)
+    case "$2" in
+      inspect) id=$(resolve "${@: -1}"); [ -n "$id" ] || exit 1; case "$*" in *'{{.Id}}'*) echo "$id" ;; esac ;;
+    esac ;;
+  pull) [ "${PULL_RC:-0}" = 0 ] || exit 1; echo sha256:new > "$T/$(key "${@: -1}")" ;;
+esac
+exit 0
+"""
+
+# Fake curl: /readyz is 200 when the running image is a healthy one ($HEALTHY lists the ids), else 503.
+FAKE_CURL = r"""#!/usr/bin/env bash
+running=$(cat "$FAKE/running" 2>/dev/null)
+case " $HEALTHY " in *" $running "*) printf 200 ;; *) printf 503 ;; esac
+"""
+
+FAKE_GIT = r"""#!/usr/bin/env bash
+case "$*" in *rev-parse*) echo 1111111111111111111111111111111111111111 ;; *log*) echo "1111111 new version" ;; esac
+"""
+
+
+@pytest.fixture
+def vm(tmp_path):
+    """A pretend VM: the checkout, a fake docker/curl/git/sleep on PATH, the old version running and healthy."""
+    if BASH is None:
+        pytest.skip("needs bash (Git Bash on Windows)")
+    checkout = tmp_path / "checkout"
+    (checkout / "deploy").mkdir(parents=True)
+    shutil.copy(DEPLOY / "deploy.sh", checkout / "deploy" / "deploy.sh")
+    (checkout / "deploy" / ".env").write_text("PROJECT_NAME=hh\nHOST_PORT=8130\n", newline="\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in (("docker", FAKE_DOCKER), ("curl", FAKE_CURL), ("git", FAKE_GIT),
+                       ("sleep", "#!/usr/bin/env bash\nexit 0\n")):
+        (bin_dir / name).write_text(body, newline="\n")
+        (bin_dir / name).chmod(0o755)
+    fake = tmp_path / "fake"
+    (fake / "tags").mkdir(parents=True)
+    (fake / "running").write_text("sha256:old\n", newline="\n")
+    (fake / "tags" / "hh-api_latest").write_text("sha256:old\n", newline="\n")
+
+    def run(*args, **env):
+        e = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "FAKE": str(fake), "PROJECT": "hh",
+             "NURSERYPOS_DIR": str(checkout), "NURSERYPOS_STATE": str(tmp_path / "state"), "NURSERYPOS_SYNCED": "1",
+             "READY_TIMEOUT": "6", "READY_STREAK": "2", "HEALTHY": "sha256:old sha256:new", **env}
+        r = subprocess.run([BASH, str(checkout / "deploy" / "deploy.sh"), *args], env=e, capture_output=True,
+                           text=True, timeout=60)
+        calls = (fake / "calls").read_text().splitlines() if (fake / "calls").exists() else []
+        return r, calls, (fake / "running").read_text().strip()
+
+    run.state = tmp_path / "state" / "staging"
+    run.tags = fake / "tags"
+    return run
+
+
+def test_deploy_migrates_before_the_swap_and_keeps_the_new_version(vm):
+    r, calls, running = vm("staging")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert running == "sha256:new"
+    migrate = calls.index("docker compose run --rm --no-TTY migrate")
+    swap = calls.index("docker compose up -d --no-build --remove-orphans")
+    assert calls.index("docker compose build web") < migrate < swap
+    assert "docker tag sha256:old hh-api:rollback" in calls  # what ran before is kept for a rollback
+    assert "docker tag hh-api:latest hh-api:1111111111111111111111111111111111111111" in calls
+    assert (vm.state / "good").read_text().strip() == "1111111111111111111111111111111111111111"
+
+
+def test_a_broken_image_is_rolled_back_by_itself(vm):
+    r, calls, running = vm("staging", HEALTHY="sha256:old")  # the new image never becomes ready
+    assert r.returncode == 1
+    assert running == "sha256:old"
+    assert "docker compose up -d --no-build --no-deps web worker" in calls  # the old one back, no migration run
+    assert "rolled back" in r.stdout
+    assert not (vm.state / "good").exists()
+    assert (vm.tags / "hh-api_latest").read_text().strip() == "sha256:old"
+
+
+def test_failed_migrations_never_swap(vm):
+    r, calls, running = vm("staging", MIGRATE_RC="1")
+    assert r.returncode == 1
+    assert running == "sha256:old"
+    assert not any(c.startswith("docker compose up -d --no-build --remove-orphans") for c in calls)
+    assert (vm.tags / "hh-api_latest").read_text().strip() == "sha256:old"  # a restart starts the old image too
+    assert "FAILED: migrations" in (vm.state / "deploy.log").read_text()
+
+
+def test_bad_settings_stop_before_the_migrations(vm):
+    r, calls, running = vm("staging", SETTINGS_RC="2")
+    assert r.returncode == 1 and running == "sha256:old"
+    assert "docker compose run --rm --no-TTY migrate" not in calls
+
+
+def test_prebuilt_image_from_ghcr(vm, tmp_path):
+    env_file = tmp_path / "checkout" / "deploy" / ".env"
+    env_file.write_text(env_file.read_text() + "IMAGE_SOURCE=ghcr\nGHCR_IMAGE=ghcr.io/acme/hara-hisaab-api\n",
+                        newline="\n")
+    r, calls, running = vm("staging")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "docker pull --quiet ghcr.io/acme/hara-hisaab-api:1111111111111111111111111111111111111111" in calls
+    assert "docker compose build web" not in calls
+    assert running == "sha256:new"
+
+
+def test_manual_rollback(vm):
+    assert vm("staging")[0].returncode == 0
+    r, calls, running = vm("staging", "rollback")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert running == "sha256:old"
+
+
+def test_unknown_target_or_action():
+    if BASH is None:
+        pytest.skip("needs bash")
+    for args in (["qa"], ["staging", "nuke"], []):
+        r = subprocess.run([BASH, str(DEPLOY / "deploy.sh"), *args], capture_output=True, text=True)
+        assert r.returncode == 2 and "usage" in r.stderr

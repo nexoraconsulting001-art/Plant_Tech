@@ -1,0 +1,56 @@
+# Weekly update pull requests (against staging, which is where changes are tested first). CI runs on each one.
+# - Python: requirements*.txt change; regenerate the lock files in the same PR before merging
+#   (cd backend && uv pip compile ... as written at the top of requirements.lock and requirements-dev.lock).
+# - App: Expo SDK packages move together with `npx expo install --fix`, never one by one, so majors of expo,
+#   react, react-native and @expo/* / expo-* are left to the planned SDK upgrade.
+# - Actions and the Docker base image: SHA / tag bumps, grouped.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    target-branch: staging
+    schedule: { interval: weekly, day: monday, timezone: Asia/Kolkata }
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, backend]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    target-branch: staging
+    schedule: { interval: weekly, day: monday, timezone: Asia/Kolkata }
+    open-pull-requests-limit: 5
+    groups:
+      app-minor-and-patch:
+        update-types: [minor, patch]
+        exclude-patterns: ["expo", "expo-*", "@expo/*", "react", "react-dom", "react-native", "react-native-*"]
+    ignore:
+      - dependency-name: "expo"
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: "expo-*"
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: "@expo/*"
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: "react"
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: "react-dom"
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: "react-native"
+        update-types: [version-update:semver-major, version-update:semver-minor]
+    labels: [dependencies, app]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: staging
+    schedule: { interval: weekly, day: monday, timezone: Asia/Kolkata }
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [dependencies, ci]
+
+  - package-ecosystem: docker
+    directory: /backend
+    target-branch: staging
+    schedule: { interval: weekly, day: monday, timezone: Asia/Kolkata }
+    labels: [dependencies, backend]
