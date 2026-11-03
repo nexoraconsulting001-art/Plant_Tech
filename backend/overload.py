@@ -7,10 +7,13 @@ until MongoDB aborted them. Now:
 - InFlightLimit (pure ASGI): at most MAX_IN_FLIGHT requests are inside this worker process at once (default
   2 x MONGO_MAX_POOL_SIZE, see settings.py). One more gets 503 `busy` with Retry-After at once, before any route
   code or database call runs, so the app may send it again whatever it was. /livez, /readyz, /health and
-  /metrics are never refused. uvicorn's own `limit_concurrency` is not used: it counts open connections too
-  (uvicorn h11_impl/httptools_impl: `len(self.connections) >= limit or len(self.tasks) >= limit`), and Caddy
-  keeps idle keep-alive connections open, so it would refuse work on an idle worker; its 503 is also plain text,
-  without Retry-After or the app's error shape.
+  /metrics are never refused. The AI routes (/api/ai/...) are neither refused nor counted: a scan waits up to
+  150 s for Claude without a database connection, so a burst of supplier-bill scans would otherwise take the
+  places of billing requests on a worker whose pool is idle; ai_guard already limits them (AI_MAX_CONCURRENCY per
+  process, and a wait of AI_QUEUE_WAIT_SECONDS at most for a slot). uvicorn's own `limit_concurrency` is not
+  used: it counts open connections too (uvicorn h11_impl/httptools_impl: `len(self.connections) >= limit or
+  len(self.tasks) >= limit`), and Caddy keeps idle keep-alive connections open, so it would refuse work on an idle
+  worker; its 503 is also plain text, without Retry-After or the app's error shape.
 - db_error_handler: MongoDB too slow or out of reach (no free connection in the pool, an operation over its
   time limit, no primary, a network timeout: PyMongo's `error.timeout`, or any ConnectionFailure) becomes 503
   `db_busy` with Retry-After and one warning line, never a 500 with a traceback. Any other database error is
@@ -29,6 +32,7 @@ from observability import QUIET_ROUTES
 
 log = logging.getLogger(__name__)
 
+UNCOUNTED_PREFIXES = ("/api/ai/",)  # long waits without a database connection, limited by ai_guard instead
 RETRY_AFTER = 2  # seconds the app waits before sending again (it adds its own random part)
 WARN_EVERY = 10  # seconds between two "refusing requests" lines of one worker
 
@@ -52,7 +56,8 @@ class InFlightLimit:
         self._warned_at = 0.0
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") in QUIET_ROUTES:
+        path = scope.get("path") or ""
+        if scope["type"] != "http" or path in QUIET_ROUTES or path.startswith(UNCOUNTED_PREFIXES):
             return await self.app(scope, receive, send)
         if self.in_flight >= self.limit:
             self.refused += 1

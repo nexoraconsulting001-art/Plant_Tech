@@ -7,6 +7,8 @@ rebuild --touched-since <day>`). Reports read the rollups only once REPORTS_FROM
 """
 import rollups
 
+TIMEOUT = None  # rollups.rebuild limits each step; a big database takes longer than the runner's hour (STEP_TIMEOUT)
+
 
 async def up(db):
     await rollups.rebuild(db)

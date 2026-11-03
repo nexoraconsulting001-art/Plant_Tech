@@ -5,6 +5,7 @@ used to be (copied below as legacy_*), on a shop with cancelled, corrected, old-
 `wired` is the app with REPORTS_FROM_ROLLUPS on; sales.py calls rollups.apply() inside the transactions that save,
 cancel and correct a bill (WP-1).
 """
+import asyncio
 import importlib
 import statistics
 import time
@@ -422,6 +423,59 @@ def test_backfill_migration_and_rebuild_are_repeatable(client):
                                          "date_key": "2020-01-01", "name": "Rose", "lines": 1}))
     assert run(rollups.rebuild(_db(), bid)) == 2
     assert _rollup_docs(bid) == first
+
+
+def _stale_days(bid, days):
+    """Rollups of days without bills (a rebuild removes them): quick shop-days to rebuild."""
+    run(_db()[rollups.SALES].insert_many([{"_id": rollups.day_id(bid, d), "business_id": bid, "date_key": d,
+                                           "orders": 1, "paise": 100} for d in days]))
+
+
+def _slow_days(monkeypatch, seconds, fail=()):
+    """rollups.rebuild_day taking `seconds` per shop-day (failing for the shops in `fail`); returns the days done."""
+    real, done = rollups.rebuild_day, []
+
+    async def slow(db, bid, day):
+        await asyncio.sleep(seconds)
+        if bid in fail:
+            raise RuntimeError("rebuild_day failed")
+        done.append((bid, day))
+        return await real(db, bid, day)
+
+    monkeypatch.setattr(rollups, "rebuild_day", slow)
+    return done
+
+
+@pytest.mark.skipif(MOCK, reason="time limits need a real MongoDB")
+def test_the_backfill_has_no_limit_on_the_whole_run(client, monkeypatch):
+    """Load-test fix review: a full rebuild handles every shop-day (about 20 ms each; a year of 1000 shops is
+    hours), so neither migration 0202 nor `python rollups.py rebuild` may put one deadline on the whole run. Here
+    the runner's limit per migration is 0.5 s and the backfill takes longer; it still finishes."""
+    import migrations
+
+    days = [f"2020-01-0{i}" for i in range(1, 5)]
+    for bid in ("slow-a", "slow-b"):
+        _stale_days(bid, days)
+    done = _slow_days(monkeypatch, 0.2)
+    monkeypatch.setattr(migrations, "STEP_TIMEOUT", 0.5)
+    run(_db().migrations.delete_one({"_id": "0202_rollups_backfill"}))
+    start = time.monotonic()
+    assert run(migrations.up(_db())) == ["0202_rollups_backfill"]
+    assert time.monotonic() - start > 0.75  # each shop's 4 days one after another, the 2 shops side by side
+    assert {(b, d) for b in ("slow-a", "slow-b") for d in days} <= set(done)
+    assert run(_db()[rollups.SALES].count_documents({"business_id": {"$in": ["slow-a", "slow-b"]}})) == 0
+
+
+def test_a_shop_that_fails_to_rebuild_does_not_stop_the_others(client, monkeypatch, caplog):
+    _stale_days("fail-a", ["2020-01-01", "2020-01-02"])
+    _stale_days("fail-b", ["2020-01-01", "2020-01-02"])
+    done = _slow_days(monkeypatch, 0, fail={"fail-a"})
+    with pytest.raises(RuntimeError, match="1 shop.*fail-a"):
+        run(rollups.rebuild(_db()))
+    assert ("fail-b", "2020-01-01") in done and ("fail-b", "2020-01-02") in done
+    assert run(_db()[rollups.SALES].count_documents({"business_id": "fail-b"})) == 0
+    assert run(_db()[rollups.SALES].count_documents({"business_id": "fail-a"})) == 2
+    assert any("python rollups.py rebuild --business fail-a" in r.getMessage() for r in caplog.records)
 
 
 def test_rollup_ranges_stay_inside_the_shop_and_days():

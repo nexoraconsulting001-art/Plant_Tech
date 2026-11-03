@@ -1,5 +1,5 @@
 // The order's save timing and retry rules (src/sync-policy.ts), run by Node itself, no test framework:
-//   cd frontend && node --test --experimental-strip-types tests/*.test.mjs
+//   cd frontend && node --test --experimental-transform-types tests/*.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
 

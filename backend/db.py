@@ -15,11 +15,13 @@ mongod (a laptop) or the in-memory test database it runs the callback once with 
 once, so code written for transactions still works there. Every write inside must pass `session=session`.
 """
 import logging
+import time
 from types import SimpleNamespace
 
 import pymongo
 from pymongo import AsyncMongoClient, ReadPreference
 from pymongo.asynchronous.database import AsyncDatabase
+from pymongo.errors import ExecutionTimeout, WaitQueueTimeoutError
 from pymongo.read_concern import ReadConcern
 from pymongo.write_concern import WriteConcern
 
@@ -60,13 +62,20 @@ async def close():
     state.txn = None
 
 
-async def ping(db=None, timeout: float = 2.0) -> None:
-    """Raises when the database does not answer within `timeout` seconds (/readyz)."""
+async def ping(db=None, timeout: float = 2.0) -> str:
+    """For /readyz: "ok" when the database answers within `timeout` seconds; "busy" when every pooled connection
+    stayed in use that long (MongoDB is there; the requests holding them get 503 db_busy themselves, and taking
+    this worker out of the proxy's pool would only hold every request instead); raises when it is out of reach (no
+    primary, connection refused) or does not answer."""
     db = db if db is not None else get_db()
     if not isinstance(db, AsyncDatabase):
-        return  # the in-memory test database is always there
-    with pymongo.timeout(timeout):
-        await db.command("ping")
+        return "ok"  # the in-memory test database is always there
+    try:
+        with pymongo.timeout(timeout):
+            await db.command("ping")
+    except WaitQueueTimeoutError:
+        return "busy"
+    return "ok"
 
 
 async def supports_transactions(db=None) -> bool:
@@ -86,12 +95,16 @@ async def in_transaction(callback, db=None, *, read_concern=ReadConcern("snapsho
     """`await callback(session)` in one transaction (see the module notes); returns what the callback returns.
     The callback may run more than once (retries), so it must not have side effects outside the database.
 
-    The whole transaction, retries included, gets `timeout` seconds (default twice MONGO_TIMEOUT_MS, 10 s: the
-    app's own limit on a request, after which nobody waits for the answer): without a pymongo.timeout() around it,
-    with_transaction keeps retrying transient errors (write conflicts) for up to 120 s. Over the limit PyMongo
-    raises a timeout error (`.timeout` is True), which the API answers with 503 db_busy (overload.py); a bill's
-    Idempotency-Key makes the app's retry safe. Inside a longer pymongo.timeout() (a job) the shorter of the two
-    applies, as pymongo.timeout() nests."""
+    The callback's tries, retries included, get `timeout` seconds in all (default twice MONGO_TIMEOUT_MS, 10 s: the
+    app's own limit on a request, after which nobody waits for the answer): left alone, with_transaction keeps
+    retrying transient errors (write conflicts) for up to 120 s. Each try runs under a pymongo.timeout() of what is
+    left, and a retry with nothing left fails at once. Over the limit the error is a timeout (`.timeout` is True),
+    which the API answers with 503 db_busy (overload.py); a bill's Idempotency-Key makes the app's retry safe.
+    The limit is on the callback only, not around with_transaction: there, a try that ran out of time also left
+    no time for its abortTransaction, which PyMongo then skips without a word, so MongoDB kept the transaction and
+    its locks (the shop's invoice counter) for transactionLifetimeLimitSeconds, 60 s, and every bill of that shop
+    meanwhile hit a write conflict. The abort and the commit run under the usual per-operation limit instead.
+    Inside a longer pymongo.timeout() (a job) the shorter of the two applies, as pymongo.timeout() nests."""
     db = db if db is not None else get_db()
     if not await supports_transactions(db):
         if not state.warned:
@@ -99,8 +112,16 @@ async def in_transaction(callback, db=None, *, read_concern=ReadConcern("snapsho
             log.warning("MongoDB is not a replica set: writes run without transactions (dev only)")
         return await callback(None)
     seconds = timeout if timeout is not None else TXN_TIMEOUT_FACTOR * get_settings().mongo_timeout_ms / 1000
-    with pymongo.timeout(seconds):
-        async with db.client.start_session() as session:
-            return await session.with_transaction(callback, read_concern=read_concern, write_concern=write_concern,
-                                                  read_preference=read_preference,
-                                                  max_commit_time_ms=max_commit_time_ms)
+    deadline = time.monotonic() + seconds
+
+    async def bounded(session):
+        left = deadline - time.monotonic()
+        if left <= 0:  # not a TransientTransactionError: with_transaction stops here
+            msg = f"transaction time limit of {seconds:g} s reached"
+            raise ExecutionTimeout(msg, 50, {"ok": 0, "code": 50, "errmsg": msg})
+        with pymongo.timeout(left):
+            return await callback(session)
+
+    async with db.client.start_session() as session:
+        return await session.with_transaction(bounded, read_concern=read_concern, write_concern=write_concern,
+                                              read_preference=read_preference, max_commit_time_ms=max_commit_time_ms)

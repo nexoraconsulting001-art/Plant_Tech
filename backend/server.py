@@ -118,16 +118,17 @@ async def _storage_ready() -> bool:
 
 @app.get("/readyz", include_in_schema=False)
 async def readyz():
-    """Ready for traffic: MongoDB answers and photo storage is reachable. 503 otherwise (take it out of the pool)."""
+    """Ready for traffic: MongoDB answers and photo storage is reachable. 503 otherwise (take it out of the pool).
+    MongoDB "busy" (every pooled connection in use, db.ping) is still ready: this worker answers 503 busy/db_busy
+    at once, which the app retries, while a proxy with no upstream left would hold every request for 30 s."""
     checks = {}
     try:
-        await db_module.ping()
-        checks["mongo"] = "ok"
+        checks["mongo"] = await db_module.ping()
     except Exception as e:
         logger.warning("readyz: mongo ping failed: %s", e)
         checks["mongo"] = "down"
     checks["storage"] = "ok" if await _storage_ready() else "down"
-    ok = all(v == "ok" for v in checks.values())
+    ok = "down" not in checks.values()
     return JSONResponse({"ok": ok, "checks": checks}, status_code=200 if ok else 503)
 
 

@@ -109,7 +109,8 @@ export function useCreateBill() {
       router.dismissTo("/(tabs)");
       router.push({ pathname: "/bill/[id]", params: { id: inv.id, done: "1" } });
     } catch (e: any) {
-      const maybeBilled = noReply(e) || (serverBusy(e) && e.code !== "busy");
+      // "busy" alone: refused before anything was done. After a "db_busy" try (maybeDone) the bill may exist.
+      const maybeBilled = noReply(e) || (serverBusy(e) && (e.code !== "busy" || e.maybeDone));
       cart.billFailed(maybeBilled);
       if (e instanceof ApiError && e.code === "idempotency_mismatch" && e.params.invoice_id) {
         await notice(t("Already billed"), e.message);

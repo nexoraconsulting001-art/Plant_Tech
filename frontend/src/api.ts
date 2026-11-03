@@ -39,6 +39,9 @@ export function setOnUnauthorized(fn: (() => void) | null) {
 
 export class ApiError extends Error {
   retryAfterMs: number | null = null; // the server's Retry-After, in ms
+  // An earlier try of this request (request() sends a 503 again) got an answer that may mean it was done: a 503
+  // other than "busy". The last try's "busy" then doesn't mean it was not done (a bill: order.ts).
+  maybeDone = false;
   constructor(message: string, public status: number, public code = "", public params: Record<string, unknown> = {}) {
     super(message);
   }
@@ -79,12 +82,17 @@ function pause(ms: number, signal?: AbortSignal) {
 
 async function request(method: string, path: string, body?: unknown, opts: RequestOptions = {}) {
   const keyed = !!opts.headers?.["Idempotency-Key"];
+  let maybeDone = false;
   for (let attempt = 0; ; attempt++) {
     try {
       return await requestOnce(method, path, body, opts);
     } catch (e) {
       const again = e instanceof ApiError && attempt + 1 < BUSY_TRIES && busyRetry(e.status, e.code, method, keyed);
-      if (!again || opts.signal?.aborted) throw e;
+      if (!again || opts.signal?.aborted) {
+        if (maybeDone && e instanceof ApiError) e.maybeDone = true;
+        throw e;
+      }
+      if (e.code !== "busy") maybeDone = true; // "db_busy" or the proxy's own 503: it may have done its work
       await pause(busyWaitMs(attempt, e.retryAfterMs), opts.signal);
     }
   }

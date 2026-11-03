@@ -207,9 +207,12 @@ export class CartSync {
           this.attempt = 0;
         } catch (e) {
           this.failed.add(cid);
-          if (retryable(e instanceof ApiError ? e.status : -1)) retry = true;
-          if (e instanceof ApiError && e.retryAfterMs) notBefore = Math.max(notBefore, e.retryAfterMs);
-          else if (this.outbox[cid] === p) delete this.outbox[cid]; // refused as it is; the next change tries again
+          // Kept and tried again (no answer, a timeout, a server error); anything else is refused as it is and
+          // dropped, so the next change tries again. Retry-After only sets the wait, never whether it is kept.
+          if (retryable(e instanceof ApiError ? e.status : -1)) {
+            retry = true;
+            if (e instanceof ApiError && e.retryAfterMs) notBefore = Math.max(notBefore, e.retryAfterMs);
+          } else if (this.outbox[cid] === p) delete this.outbox[cid];
         } finally {
           this.inflight = null;
           this.storeSoon();

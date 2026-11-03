@@ -104,7 +104,8 @@ def search_score(query: str, terms: list[str]) -> int:
     return score_of(name_key(query), phonetic(query), term_forms(terms))
 
 
-FORMS_CACHED = 100_000  # names; a few MB. The same product and library names come back on every search.
+FORMS_CACHED = 25_000  # names; about 9 MB per worker when full (100,000 measured 35 MB). The same shop's product
+# and library names come back keystroke after keystroke, so a smaller cache keeps most of the hits.
 
 
 @lru_cache(maxsize=FORMS_CACHED)

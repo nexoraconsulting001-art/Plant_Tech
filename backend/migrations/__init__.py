@@ -12,8 +12,11 @@ runner finds the files by name, so there is no list to edit. Numbers per work pa
 - A lock document (`migration_lock`) lets only one runner work at a time; a second one waits for it, and a
   lock left by a runner that died is taken over once it expires.
 - A migration must be idempotent: if a runner stops half-way, the next run repeats it from the start.
-- Migrations run without the 5 s per-operation limit the app uses (index builds on big collections are slow).
-  The lock is renewed every minute while one runs, so a long one never loses it to a second runner.
+- Migrations run without the 5 s per-operation limit the app uses (index builds on big collections are slow):
+  each one gets STEP_TIMEOUT seconds in all. One that limits each of its own steps instead sets `TIMEOUT = None`
+  in its file and gets no limit on the whole (0202: the rollups backfill of a big database takes longer than an
+  hour, and a whole-step limit would cut it off part way). The lock is renewed every minute while one runs, so a
+  long one never loses it to a second runner.
 - Changing many documents: walk the collection once with `walk` (batches in _id order, each one short query
   after the last _id), never "find the ones still to do, limit N" in a loop: that scans the done ones again for
   every batch (migration 0401 took 48 minutes on 2 million customers that way).
@@ -53,6 +56,7 @@ class Migration:
     number: int
     up: Callable[..., Awaitable]
     about: str
+    timeout: float | None = STEP_TIMEOUT  # the file's TIMEOUT; None: the migration limits its own steps
 
 
 class LockBusy(RuntimeError):
@@ -72,7 +76,8 @@ def discover() -> list[Migration]:
         if not callable(getattr(module, "up", None)):
             raise RuntimeError(f"migration {stem} has no up(db)")
         doc = (module.__doc__ or "").strip()
-        found.append(Migration(stem, number, module.up, doc.splitlines()[0] if doc else ""))
+        found.append(Migration(stem, number, module.up, doc.splitlines()[0] if doc else "",
+                               getattr(module, "TIMEOUT", STEP_TIMEOUT)))
     return found
 
 
@@ -160,10 +165,12 @@ async def up(db, *, wait: float = 300) -> list[str]:
             with pymongo.timeout(STEP_TIMEOUT):
                 if await db.migrations.find_one({"_id": m.id}):
                     continue
-                log.info("migration %s: running", m.id)
-                start = time.monotonic()
+            log.info("migration %s: running", m.id)
+            start = time.monotonic()
+            with pymongo.timeout(m.timeout):  # None: no limit on the whole, the client's own per operation
                 await m.up(db)
-                took = round((time.monotonic() - start) * 1000)
+            took = round((time.monotonic() - start) * 1000)
+            with pymongo.timeout(STEP_TIMEOUT):
                 await db.migrations.update_one({"_id": m.id}, {"$set": {
                     "applied_at": datetime.now(timezone.utc), "duration_ms": took, "by": owner,
                     "git_sha": get_settings().git_sha}}, upsert=True)

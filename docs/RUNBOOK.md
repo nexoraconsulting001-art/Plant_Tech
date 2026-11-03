@@ -67,6 +67,10 @@ docker compose run --rm --no-deps migrate python rollups.py rebuild --touched-si
 rm ~/.nurserypos/prod/rollups-stale-since
 docker compose run --rm --no-deps migrate python rollups.py rebuild   # every day of every shop (slow; always safe)
 ```
+A full rebuild takes about 20 ms per shop-day on an idle MongoDB (a year of 1000 shops: about 2 hours one by one;
+it runs 8 shops side by side). It has no time limit on the whole run, only per step (10 minutes to find a shop's
+days, 60 s for each day). It logs every 50 shops. A shop that fails is logged with the command that repeats it
+(`python rollups.py rebuild --business <id>`); the other shops go on, and the run exits 1 at the end.
 Rebuilding is safe while the app is billing. Until the first rebuild after the first deploy of WP-2 has worked, keep
 `REPORTS_FROM_ROLLUPS` off (the reports then read the bills).
 
@@ -274,11 +278,17 @@ Connections: `WEB_CONCURRENCY x MONGO_MAX_POOL_SIZE x VMs` must stay well under 
 **Overload protection** (`backend/overload.py`). A saturated API refuses work at once instead of queueing it:
 - Each worker works on at most `MAX_IN_FLIGHT` requests at once (default 0 = twice `MONGO_MAX_POOL_SIZE`, so 50).
   One more gets **503 `busy`** with `Retry-After: 2` before any route code runs. `/livez`, `/readyz`, `/health` and
-  `/metrics` are never refused, so a busy worker is not taken out of the pool or restarted for being busy.
+  `/metrics` are never refused, so a busy worker is not taken out of the pool or restarted for being busy. The AI
+  routes (`/api/ai/...`) are not counted either: they wait for Claude without a database connection, and
+  `AI_MAX_CONCURRENCY` limits them.
+- `/readyz` answers 200 with `"mongo": "busy"` when every pooled connection stayed in use for its 2 s check. MongoDB
+  is there and the requests get fast 503s; only no primary or no answer at all is `"down"` (503, Caddy takes the API
+  out and holds requests for up to 30 s).
 - A database call that cannot finish within `MONGO_TIMEOUT_MS` (5 s, including the wait for a pooled connection;
   PyMongo ignores `waitQueueTimeoutMS` when it is set) or cannot reach a primary gets **503 `db_busy`**, logged as one
-  `database busy:` warning line, without a traceback. A whole transaction, retries included, gets 10 s (twice the
-  limit; the app stops waiting for an answer then).
+  `database busy:` warning line, without a traceback. A transaction's tries, retries included, get 10 s (twice the
+  limit; the app stops waiting for an answer then). A try that runs out of time is aborted on MongoDB at once, so
+  it doesn't hold the shop's invoice counter until MongoDB drops it 60 s later.
 - The app (the next build, and OTA updates to 1.2.0 phones; not 1.1.0) sends a 503 again twice, after `Retry-After`
   plus a random part. A bill keeps its Idempotency-Key, so a retry never bills twice. Older apps show the message
   ("The server is busy. Please try again in a few seconds.") and the worker taps again.

@@ -7,8 +7,10 @@ reads). A walk reads each document about once.
 """
 import asyncio
 import importlib
+from datetime import datetime, timezone
 
 import pytest
+from bson import ObjectId
 
 import db as db_module
 import migrations
@@ -71,6 +73,31 @@ def test_0401_finishes_a_partly_done_collection(client, monkeypatch):
     assert all(rows[c["id"]]["name_key"] == "kept as it was" for c in docs[::2])
     assert all(rows[c["id"]]["name_key"] == c["name"].lower() for c in docs[1::2])
 
+
+
+def test_0401_fills_a_customer_saved_behind_the_walk(client, monkeypatch):
+    """Load-test fix review: a customer saved without the fields while 0401 runs, with an _id below where the walk
+    has got to (another process's or machine's ObjectId), is filled by the last pass instead of being passed by."""
+    db = db_module.state.db
+    monkeypatch.setattr(m0401, "BATCH", 300)
+    run(db.customers.insert_many(_customers(db, 1000)))
+    behind = ObjectId.from_datetime(datetime(2020, 1, 1, tzinfo=timezone.utc))  # sorts before every _id above
+    real_walk = m0401.walk
+
+    async def walk_with_a_late_insert(*args, **kwargs):
+        first = True
+        async for docs in real_walk(*args, **kwargs):
+            yield docs
+            if first:
+                first = False
+                await db.customers.insert_one({"_id": behind, **_customers(db, 1, start=5000)[0]})
+
+    monkeypatch.setattr(m0401, "walk", walk_with_a_late_insert)
+    run(m0401.up(db))
+    late = run(db.customers.find_one({"_id": behind}))
+    fields = ("name_key", "name_words", "phone10", "phone10_rev")
+    assert {k: late[k] for k in fields} == search_fields(late["name"], late["phone"])
+    assert run(db.customers.count_documents({"name_key": None})) == 0
 
 def test_walk_visits_every_match_once_in_id_order(client):
     db = db_module.state.db

@@ -27,20 +27,28 @@ until it worked. By hand: `python rollups.py rebuild` (every day) or `--since <d
 (`python rollups.py rebuild --business <id>` or `await rollups.rebuild(db, id)`): demo_data.py's seed, refresh and
 remove do.
 """
+import asyncio
 import inspect
+import logging
 import os
 from datetime import date, datetime, timedelta
 
+import pymongo
 from pymongo import UpdateOne
 from pymongo.asynchronous.database import AsyncDatabase
 
 from common import IST
 from db import in_transaction
 
+log = logging.getLogger("rollups")
+
 SALES, ITEMS = "daily_sales", "daily_item_sales"
 LIVE = {"status": {"$ne": "Cancelled"}}  # the same as sales.LIVE (not imported: sales.py imports this module)
 METHODS = ("Cash", "UPI", "Card")
-REBUILD_DAY_TIMEOUT = 60  # seconds for one shop-day's rebuild transaction (a request's transaction gets 5 s)
+REBUILD_DAY_TIMEOUT = 60  # seconds for one shop-day's rebuild transaction (a request's transaction gets 10 s)
+REBUILD_FIND_TIMEOUT = 600  # seconds to find one shop's days to rebuild (or the list of shops)
+REBUILD_SHOPS_AT_ONCE = 8  # shops rebuilt side by side (each one's days one after another)
+PROGRESS_EVERY = 50  # a "shops rebuilt" log line every this many shops
 # The bill fields changes() reads
 BILL_FIELDS = {"_id": 0, "business_id": 1, "date_key": 1, "grand_total": 1, "payment_method": 1, "created_by.id": 1,
                "created_at": 1, "first_billed_at": 1, "items.name": 1, "items.quantity": 1, "items.price": 1,
@@ -200,25 +208,50 @@ async def _days_since(db, business_id: str, since: str) -> set[tuple[str, str]]:
     return pairs
 
 
+async def _shops(db) -> list[str]:
+    """Every shop with a shop record, bills or rollups (a removed shop's leftovers are rebuilt away too)."""
+    with pymongo.timeout(REBUILD_FIND_TIMEOUT):
+        ids = {b["id"] async for b in db.businesses.find({}, {"_id": 0, "id": 1})}
+        ids |= set(await db.invoices.distinct("business_id"))  # the {business_id, date_key} index: one key per shop
+        ids |= set(await db[SALES].distinct("business_id"))
+    return sorted(i for i in ids if i)
+
+
 async def rebuild(db, business_id: str | None = None, since: str = "") -> int:
     """Rebuild every shop-day that has bills or rollups (one shop, or all; with `since`, only the days from that
-    date_key on). Safe to run while the app is billing, and to repeat. Returns how many days were rebuilt."""
-    pairs = set()
-    if since:
-        shops = [business_id] if business_id else [b["id"] async for b in db.businesses.find({}, {"_id": 0, "id": 1})]
-        for bid in shops:
-            pairs |= await _days_since(db, bid, since)
-    else:
-        async for g in await aggregate(db.invoices, [{"$match": {"business_id": business_id} if business_id else {}},
-                                                     {"$group": {"_id": {"b": "$business_id", "d": "$date_key"}}}]):
-            if g["_id"].get("b") and g["_id"].get("d"):
-                pairs.add((g["_id"]["b"], g["_id"]["d"]))
-        async for doc in db[SALES].find({"_id": id_range(business_id)} if business_id else {},
-                                        {"business_id": 1, "date_key": 1}):
-            pairs.add((doc["business_id"], doc["date_key"]))
-    for bid, day in sorted(pairs):
-        await rebuild_day(db, bid, day)
-    return len(pairs)
+    date_key on). Safe to run while the app is billing, and to repeat. Returns how many days were rebuilt.
+
+    There is no limit on the whole run (a year of 1000 shops is about 365,000 shop-days, an hour or more), only per
+    step: REBUILD_FIND_TIMEOUT to find a shop's days, REBUILD_DAY_TIMEOUT for each day's transaction. So callers must
+    not wrap it in a pymongo.timeout() of their own (nested, the shorter one applies): the CLI below and migration
+    0202 don't. Shops are rebuilt REBUILD_SHOPS_AT_ONCE at a time, each one's days in order. A shop that fails is
+    logged with the command that repeats it, the others go on, and the run then raises naming the failed shops."""
+    shops = [business_id] if business_id else await _shops(db)
+    gate = asyncio.Semaphore(REBUILD_SHOPS_AT_ONCE)
+    done, failed = [0], []
+
+    async def one(bid: str) -> int:
+        async with gate:
+            try:
+                with pymongo.timeout(REBUILD_FIND_TIMEOUT):
+                    days = sorted(day for _, day in await _days_since(db, bid, since))
+                for day in days:
+                    await rebuild_day(db, bid, day)
+            except Exception as e:
+                failed.append(bid)
+                log.warning("rollups: shop %s failed (%s: %s); repeat it with: "
+                            "python rollups.py rebuild --business %s%s",
+                            bid, type(e).__name__, str(e)[:200], bid, f" --since {since}" if since else "")
+                return 0
+            done[0] += 1
+            if len(shops) > 1 and (done[0] % PROGRESS_EVERY == 0 or done[0] == len(shops)):
+                log.info("rollups: %d of %d shops rebuilt", done[0], len(shops))
+            return len(days)
+
+    n = sum(await asyncio.gather(*(one(bid) for bid in shops)))
+    if failed:
+        raise RuntimeError(f"rollups rebuild failed for {len(failed)} shop(s): {', '.join(sorted(failed)[:20])}")
+    return n
 
 
 def rupees(paise: int | float) -> float:
@@ -271,9 +304,6 @@ def touched_since(day: str) -> str:
 
 if __name__ == "__main__":  # python rollups.py rebuild [--business <id>] [--since <day> | --touched-since <day>]
     import argparse
-    import asyncio
-
-    import pymongo
 
     import db as db_module
     import observability
@@ -282,8 +312,9 @@ if __name__ == "__main__":  # python rollups.py rebuild [--business <id>] [--sin
         db_module.set_appname("hara-hisaab-rollups")
         since = touched_since(args.touched_since) if args.touched_since else args.since
         try:
-            with pymongo.timeout(3600):  # lifts the app's 5 s limit per operation
-                n = await rebuild(db_module.get_db(), args.business or None, since)
+            # No pymongo.timeout() around it: rebuild() limits each step, and one around the whole run would cut a
+            # big database's rebuild off part way (a failed shop is logged with the command that repeats it).
+            n = await rebuild(db_module.get_db(), args.business or None, since)
             print(f"rebuilt {n} shop-day(s)" + (f" from {since}" if since else ""))
             return 0
         finally:

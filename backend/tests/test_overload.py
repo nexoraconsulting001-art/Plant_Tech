@@ -1,18 +1,20 @@
 """Overload protection (overload.py): the in-flight limit, database timeouts as 503 db_busy, the transaction limit."""
 import asyncio
+import json
 import logging
 import time
 
 import httpx
 import pytest
+from pymongo import AsyncMongoClient
 from pymongo.errors import (AutoReconnect, DuplicateKeyError, ExecutionTimeout, NetworkTimeout, OperationFailure,
-                            ServerSelectionTimeoutError, WaitQueueTimeoutError)
+                            PyMongoError, ServerSelectionTimeoutError, WaitQueueTimeoutError)
 
 import catalog_search
 import db as db_module
 import overload
 import server
-from conftest import MOCK, Shop, run
+from conftest import MOCK, MONGO_URL, TEST_DB, Shop, run
 from settings import Settings
 
 needs_mongo = pytest.mark.skipif(MOCK, reason="needs a real MongoDB")
@@ -51,7 +53,7 @@ def test_requests_over_the_limit_get_503_busy_at_once():
             start = time.perf_counter()
             refused = await c.post("/api/invoices", json={})
             took = time.perf_counter() - start
-            exempt = [await c.get(p) for p in ("/livez", "/readyz", "/health", "/metrics")]
+            exempt = [await c.get(p) for p in ("/livez", "/readyz", "/health", "/metrics", "/api/ai/scan-invoice")]
             gate.set()
             done = await asyncio.gather(*held)
             after = await c.get("/fast")
@@ -63,7 +65,7 @@ def test_requests_over_the_limit_get_503_busy_at_once():
     assert refused.headers["retry-after"] == str(overload.RETRY_AFTER)
     assert refused.json() == {"detail": BUSY, "code": "busy", "key": BUSY, "params": {}}
     assert "/api/invoices" not in entered  # refused before any route code ran
-    assert [r.status_code for r in exempt] == [200, 200, 200, 200]
+    assert [r.status_code for r in exempt] == [200, 200, 200, 200, 200]  # the AI route: ai_guard limits it
     assert [r.status_code for r in done] == [200, 200] and after.status_code == 200
     assert limited.in_flight == 0 and limited.refused == 1
 
@@ -85,6 +87,7 @@ def test_the_app_refuses_with_busy_but_keeps_health_checks(client):
         assert r.headers.get("x-request-id")  # the request id and the log line still wrap it
         assert client.get("/livez").status_code == 200
         assert client.get("/readyz").status_code == 200
+        assert client.post("/api/ai/identify-plant", json={}).status_code in (401, 403)  # not counted, not refused
     finally:
         limiter.limit = was
     assert shop.get("/api/products?search=rose").status_code == 200
@@ -163,3 +166,62 @@ def test_transaction_retries_stop_at_the_time_limit(client):
     assert took < 5 and len(tries) > 1
     assert overload.is_db_unavailable(error)  # answered as 503 db_busy by the API
     assert run(db.txn_limit.count_documents({})) == 0
+
+
+@needs_mongo
+def test_a_transaction_over_its_limit_is_aborted_on_the_server(client):
+    """Load-test fix review: a try that runs out of time mid-way (the event loop sent its next command late) is
+    aborted on the server, so a bill from another worker on the same document goes through at once instead of
+    meeting a write conflict until MongoDB drops the stale transaction 60 s later."""
+    db = db_module.state.db
+    run(db.txn_abort.insert_one({"_id": "counter", "n": 0}))
+
+    async def late(session):
+        await db.txn_abort.update_one({"_id": "counter"}, {"$inc": {"n": 1}}, session=session)
+        await asyncio.sleep(0.8)
+        await db.txn_abort.find_one({"_id": "counter"}, session=session)
+
+    async def go():
+        with pytest.raises(PyMongoError) as caught:
+            await db_module.in_transaction(late, timeout=0.5)
+        other = AsyncMongoClient(MONGO_URL, **db_module.client_options())  # another worker's connections
+        try:
+            async def bump(session):
+                await other[TEST_DB].txn_abort.update_one({"_id": "counter"}, {"$inc": {"n": 1}}, session=session)
+
+            start = time.monotonic()
+            await db_module.in_transaction(bump, other[TEST_DB], timeout=3)
+            return caught.value, time.monotonic() - start
+        finally:
+            await other.close()
+
+    error, took = run(go())
+    assert overload.is_db_unavailable(error)  # 503 db_busy
+    assert took < 1, f"the second transaction waited {took:.1f} s for the first one's locks"
+    assert run(db.txn_abort.find_one({"_id": "counter"}))["n"] == 1
+
+
+# --- readiness while the pool is full ------------------------------------------------------------------------------
+@needs_mongo
+def test_readyz_stays_ready_while_every_pooled_connection_is_busy(client):
+    """Load-test fix review: a full pool (slow MongoDB operations) is not "down". /readyz answers 200 with mongo
+    "busy", so Caddy keeps the only upstream and requests get a fast 503 instead of being held for 30 s."""
+    async def go():
+        small = AsyncMongoClient(MONGO_URL, **{**db_module.client_options(), "maxPoolSize": 1})
+        real = db_module.state.db
+        db_module.state.db = small[TEST_DB]
+        try:
+            await small[TEST_DB].slow.insert_one({"x": 1})
+            hold = asyncio.create_task(small[TEST_DB].slow.find_one({"$where": "sleep(2600) || true"}))
+            await asyncio.sleep(0.3)
+            busy = await server.readyz()
+            await hold
+            idle = await server.readyz()
+            return busy, idle
+        finally:
+            db_module.state.db = real
+            await small.close()
+
+    busy, idle = run(go())
+    assert busy.status_code == 200 and json.loads(busy.body)["checks"] == {"mongo": "busy", "storage": "ok"}
+    assert idle.status_code == 200 and json.loads(idle.body)["checks"] == {"mongo": "ok", "storage": "ok"}
