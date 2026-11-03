@@ -40,6 +40,7 @@ from db import in_transaction
 SALES, ITEMS = "daily_sales", "daily_item_sales"
 LIVE = {"status": {"$ne": "Cancelled"}}  # the same as sales.LIVE (not imported: sales.py imports this module)
 METHODS = ("Cash", "UPI", "Card")
+REBUILD_DAY_TIMEOUT = 60  # seconds for one shop-day's rebuild transaction (a request's transaction gets 5 s)
 # The bill fields changes() reads
 BILL_FIELDS = {"_id": 0, "business_id": 1, "date_key": 1, "grand_total": 1, "payment_method": 1, "created_by.id": 1,
                "created_at": 1, "first_billed_at": 1, "items.name": 1, "items.quantity": 1, "items.price": 1,
@@ -178,7 +179,7 @@ async def rebuild_day(db, business_id: str, day: str) -> bool:
                                           "date_key": day, "name": name, **row} for name, row in sorted(rows.items())],
                                         session=session)
         return True
-    return await in_transaction(run, db)
+    return await in_transaction(run, db, timeout=REBUILD_DAY_TIMEOUT)
 
 
 async def aggregate(coll, pipeline: list, **kw):
@@ -281,7 +282,7 @@ if __name__ == "__main__":  # python rollups.py rebuild [--business <id>] [--sin
         db_module.set_appname("hara-hisaab-rollups")
         since = touched_since(args.touched_since) if args.touched_since else args.since
         try:
-            with pymongo.timeout(3600):  # lifts the app's 10 s limit per operation
+            with pymongo.timeout(3600):  # lifts the app's 5 s limit per operation
                 n = await rebuild(db_module.get_db(), args.business or None, since)
             print(f"rebuilt {n} shop-day(s)" + (f" from {since}" if since else ""))
             return 0

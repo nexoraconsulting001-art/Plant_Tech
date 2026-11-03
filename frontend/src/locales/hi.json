@@ -843,5 +843,6 @@
   "Photo recognition is taking too long. Please try again.": "फ़ोटो पहचानने में बहुत समय लग रहा है। कृपया फिर से कोशिश करें।",
   "Another login with this number is being checked. Please try again in a moment.": "इस नंबर से एक और लॉगिन जाँचा जा रहा है। कृपया थोड़ी देर में फिर से कोशिश करें।",
   "A composition shop files CMP-08 and GSTR-4, not GSTR-1 or GSTR-3B. Please ask your CA.": "कंपोज़िशन वाली दुकान CMP-08 और GSTR-4 भरती है, GSTR-1 या GSTR-3B नहीं। कृपया अपने CA से पूछें।",
-  "This order was already billed as {{number}} before your last changes. Those changes are not on that bill.": "आपके पिछले बदलावों से पहले ही यह ऑर्डर {{number}} के रूप में बिल हो चुका था। वे बदलाव उस बिल में नहीं हैं।"
+  "This order was already billed as {{number}} before your last changes. Those changes are not on that bill.": "आपके पिछले बदलावों से पहले ही यह ऑर्डर {{number}} के रूप में बिल हो चुका था। वे बदलाव उस बिल में नहीं हैं।",
+  "The server is busy": "सर्वर अभी व्यस्त है"
 }

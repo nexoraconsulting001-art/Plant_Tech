@@ -18,6 +18,7 @@ from asgi_correlation_id import CorrelationIdMiddleware
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
+from pymongo.errors import PyMongoError
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -25,6 +26,7 @@ import db as db_module
 import jobs
 import migrations
 import observability
+import overload
 import push
 import storage_client
 from db import get_db
@@ -66,7 +68,10 @@ for module in (auth, staff, business, library, products, customers, carts, repor
     app.include_router(module.router)
 app.include_router(sales.public_router)
 app.add_exception_handler(AppError, app_error_handler)
-# Middleware, innermost first: CORS, gzip, the request log line, then the request id around everything.
+app.add_exception_handler(PyMongoError, overload.db_error_handler)  # timeouts: 503 db_busy, not a 500
+# Middleware, innermost first: the in-flight limit (overload.py; its 503 still gets CORS headers, the log line and
+# the request id), CORS, gzip, the request log line, then the request id around everything.
+app.add_middleware(overload.InFlightLimit, limit=settings.in_flight_limit)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_allow_origins, allow_methods=["*"], allow_headers=["*"],
                    expose_headers=["X-Request-ID", "Retry-After", "Idempotent-Replayed"])
 app.add_middleware(GZipMiddleware, minimum_size=1024)

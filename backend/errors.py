@@ -21,6 +21,11 @@ class AppError(HTTPException):
         self.code, self.key, self.params = code, template, params
 
 
-async def app_error_handler(_request, exc: AppError) -> JSONResponse:
+def error_response(exc: AppError) -> JSONResponse:
+    """The error as the app gets it, with its own headers (e.g. Retry-After); also used outside a route."""
     return JSONResponse({"detail": exc.detail, "code": exc.code, "key": exc.key, "params": exc.params},
                         status_code=exc.status_code, headers=exc.headers)
+
+
+async def app_error_handler(_request, exc: AppError) -> JSONResponse:
+    return error_response(exc)

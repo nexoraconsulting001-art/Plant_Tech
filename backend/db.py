@@ -3,9 +3,11 @@
 One client per process, created on first use: gunicorn starts each worker before any connection is made. The
 client is tied to the event loop that first uses it (a PyMongo rule), so the app closes it on shutdown (`close`).
 
-Connection settings are explicit (settings.py): pool size per process, a 5 s server-selection limit, a 10 s
-limit on every operation (`timeoutMS`; `pymongo.timeout()` lifts it for slow jobs such as migrations), retried
-writes, majority write concern and an app name that shows in Atlas.
+Connection settings are explicit (settings.py): pool size per process, a 5 s server-selection limit, a 5 s
+limit on every operation including its wait for a pooled connection (`timeoutMS`; PyMongo then ignores
+waitQueueTimeoutMS, so none is set; `pymongo.timeout()` lifts it for slow jobs such as migrations), retried
+writes, majority write concern and an app name that shows in Atlas. Too many requests for the pool are refused
+before they get here (overload.py), and a timeout becomes 503 db_busy, not a 500.
 
 `in_transaction(callback)` runs `await callback(session)` as one transaction, retried by PyMongo on
 TransientTransactionError and UnknownTransactionCommitResult. Transactions need a replica set; on a standalone
@@ -26,6 +28,7 @@ from settings import get_settings
 log = logging.getLogger(__name__)
 
 state = SimpleNamespace(client=None, db=None, txn=None, warned=False, appname=None)
+TXN_TIMEOUT_FACTOR = 2  # a whole transaction with its retries: twice MONGO_TIMEOUT_MS (in_transaction)
 
 
 def client_options(appname: str | None = None) -> dict:
@@ -79,15 +82,25 @@ async def supports_transactions(db=None) -> bool:
 
 async def in_transaction(callback, db=None, *, read_concern=ReadConcern("snapshot"),
                          write_concern=WriteConcern("majority"), read_preference=ReadPreference.PRIMARY,
-                         max_commit_time_ms: int | None = None):
+                         max_commit_time_ms: int | None = None, timeout: float | None = None):
     """`await callback(session)` in one transaction (see the module notes); returns what the callback returns.
-    The callback may run more than once (retries), so it must not have side effects outside the database."""
+    The callback may run more than once (retries), so it must not have side effects outside the database.
+
+    The whole transaction, retries included, gets `timeout` seconds (default twice MONGO_TIMEOUT_MS, 10 s: the
+    app's own limit on a request, after which nobody waits for the answer): without a pymongo.timeout() around it,
+    with_transaction keeps retrying transient errors (write conflicts) for up to 120 s. Over the limit PyMongo
+    raises a timeout error (`.timeout` is True), which the API answers with 503 db_busy (overload.py); a bill's
+    Idempotency-Key makes the app's retry safe. Inside a longer pymongo.timeout() (a job) the shorter of the two
+    applies, as pymongo.timeout() nests."""
     db = db if db is not None else get_db()
     if not await supports_transactions(db):
         if not state.warned:
             state.warned = True
             log.warning("MongoDB is not a replica set: writes run without transactions (dev only)")
         return await callback(None)
-    async with db.client.start_session() as session:
-        return await session.with_transaction(callback, read_concern=read_concern, write_concern=write_concern,
-                                              read_preference=read_preference, max_commit_time_ms=max_commit_time_ms)
+    seconds = timeout if timeout is not None else TXN_TIMEOUT_FACTOR * get_settings().mongo_timeout_ms / 1000
+    with pymongo.timeout(seconds):
+        async with db.client.start_session() as session:
+            return await session.with_transaction(callback, read_concern=read_concern, write_concern=write_concern,
+                                                  read_preference=read_preference,
+                                                  max_commit_time_ms=max_commit_time_ms)

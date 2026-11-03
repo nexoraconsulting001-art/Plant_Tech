@@ -6,8 +6,10 @@
 // makes this one with a new number. If the bill can no longer be corrected (cancelled meanwhile, or the days are
 // over), the owner is told and the correction is dropped.
 // Never billed twice: every try for this order (a retry after no answer, "Bill anyway") sends the same
-// Idempotency-Key (cart.billKey), and the server answers a key it has seen with the bill it already made. Nothing is
-// retried by itself: after no answer the order stays on screen and the worker taps the payment again. If the order
+// Idempotency-Key (cart.billKey), and the server answers a key it has seen with the bill it already made. Only a busy
+// server (503) is retried by itself, by api.ts with the same key; if it stays busy, or after no answer, the order stays
+// on screen and the worker taps the payment again. A 503 "busy" refused the bill before reading it; any other 503
+// (the database was too slow) may have made it, so it is handled like no answer. If the order
 // was changed meanwhile (an item added, another payment method) and the first try had been billed after all, the
 // server says so (idempotency_mismatch): the worker is told, and that bill opens instead of the changed order.
 // After the bill (afterBill): only what a bill changes is marked out of date, and the bill screen opens from the answer.
@@ -16,7 +18,7 @@ import { useRouter } from "expo-router";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, apiPost, noReply } from "@/src/api";
+import { ApiError, apiPost, noReply, serverBusy } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { isLoose, OrderCustomer, useCart } from "@/src/cart-context";
 import { useToast } from "@/src/components/toast";
@@ -107,7 +109,8 @@ export function useCreateBill() {
       router.dismissTo("/(tabs)");
       router.push({ pathname: "/bill/[id]", params: { id: inv.id, done: "1" } });
     } catch (e: any) {
-      cart.billFailed(noReply(e));
+      const maybeBilled = noReply(e) || (serverBusy(e) && e.code !== "busy");
+      cart.billFailed(maybeBilled);
       if (e instanceof ApiError && e.code === "idempotency_mismatch" && e.params.invoice_id) {
         await notice(t("Already billed"), e.message);
         cart.billed();
@@ -126,6 +129,8 @@ export function useCreateBill() {
       // No answer: the bill may have been made. Trying again is safe (same key) and shows it if it was.
       if (noReply(e)) {
         await notice(t("No answer from the server"), t("The bill may or may not have been made. Tap the payment again: it will not be billed twice."));
+      } else if (maybeBilled) {
+        await notice(t("The server is busy"), t("The bill may or may not have been made. Tap the payment again: it will not be billed twice."));
       } else toast.show(e.message, "error");
     } finally {
       setBusy(false);

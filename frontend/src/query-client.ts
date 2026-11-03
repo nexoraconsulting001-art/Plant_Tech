@@ -1,5 +1,5 @@
 // One QueryClient for the whole app; the provider in app/_layout.tsx uses this instance.
-// Retries only network/server errors: a 403 or 404 won't fix itself.
+// Retries only network/server errors: a 403 or 404 won't fix itself, and a busy server (503) was already retried.
 // Online state comes from NetInfo and "focused" from the app being in the foreground (React Query's React Native
 // guide): while offline, queries wait instead of failing and run again when the phone is back online. Coming back to
 // the app reloads what is on screen only if it is over a minute old (returning from WhatsApp after a bill reloads nothing).
@@ -24,7 +24,8 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 10_000,
-      retry: (count, error: any) => count < 2 && !(error?.status >= 400 && error?.status < 500),
+      // 503 (server busy): api.ts already tried again after the server's Retry-After; more tries would only add load
+      retry: (count, error: any) => count < 2 && !(error?.status >= 400 && error?.status < 500) && error?.status !== 503,
       refetchOnWindowFocus: (q) => Date.now() - q.state.dataUpdatedAt > FOCUS_REFRESH_AFTER_MS,
     },
   },

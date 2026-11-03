@@ -48,8 +48,18 @@ class Settings(BaseSettings):
     mongo_db: str = Field("nurserypos", validation_alias=AliasChoices("MONGO_DB", "DB_NAME"))
     mongo_max_pool_size: int = Field(25, ge=1, le=500)  # per process; 4 workers x 25 per VM
     mongo_server_selection_timeout_ms: int = Field(5000, ge=100)
-    mongo_timeout_ms: int = Field(10000, ge=100)  # whole-operation limit (CSOT); migrations lift it
+    # Whole-operation limit (CSOT); a whole transaction with its retries gets twice this (db.in_transaction).
+    # It includes the wait for a free pooled connection: with timeoutMS set PyMongo ignores waitQueueTimeoutMS
+    # (pool._get_conn takes the CSOT deadline first), so this is also how long a request can wait for one.
+    # 5 s: a healthy bill transaction is about 10 ms of MongoDB time. Long jobs set their own pymongo.timeout()
+    # (migrations, rollups rebuild, retention, shop erase); export cursors get the limit per batch.
+    mongo_timeout_ms: int = Field(5000, ge=100)
     mongo_appname: str = "hara-hisaab"
+    # Requests one API worker process works on at once (overload.py); more get 503 "busy" at once. 0 = twice
+    # MONGO_MAX_POOL_SIZE: a request holds a pooled connection only while one of its database calls runs, so
+    # twice the pool keeps the connections busy while the other half of the requests run Python, and caps the
+    # wait for a connection at about one other request's call. Above that, requests only queue (and time out).
+    max_in_flight: int = Field(0, ge=0)
 
     jwt_secret: str = ""
 
@@ -149,6 +159,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env == "production"
+
+    @property
+    def in_flight_limit(self) -> int:
+        """MAX_IN_FLIGHT, or twice the MongoDB pool when it is 0 (the default)."""
+        return self.max_in_flight or 2 * self.mongo_max_pool_size
 
     @property
     def docs_enabled(self) -> bool:

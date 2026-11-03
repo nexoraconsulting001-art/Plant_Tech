@@ -271,6 +271,23 @@ next step on these triggers, not on guesses.
 Connections: `WEB_CONCURRENCY x MONGO_MAX_POOL_SIZE x VMs` must stay well under the Atlas tier's limit
 (M10: 1500, M30: 3000); 3 VMs x 4 workers x 25 = 300.
 
+**Overload protection** (`backend/overload.py`). A saturated API refuses work at once instead of queueing it:
+- Each worker works on at most `MAX_IN_FLIGHT` requests at once (default 0 = twice `MONGO_MAX_POOL_SIZE`, so 50).
+  One more gets **503 `busy`** with `Retry-After: 2` before any route code runs. `/livez`, `/readyz`, `/health` and
+  `/metrics` are never refused, so a busy worker is not taken out of the pool or restarted for being busy.
+- A database call that cannot finish within `MONGO_TIMEOUT_MS` (5 s, including the wait for a pooled connection;
+  PyMongo ignores `waitQueueTimeoutMS` when it is set) or cannot reach a primary gets **503 `db_busy`**, logged as one
+  `database busy:` warning line, without a traceback. A whole transaction, retries included, gets 10 s (twice the
+  limit; the app stops waiting for an answer then).
+- The app (the next build, and OTA updates to 1.2.0 phones; not 1.1.0) sends a 503 again twice, after `Retry-After`
+  plus a random part. A bill keeps its Idempotency-Key, so a retry never bills twice. Older apps show the message
+  ("The server is busy. Please try again in a few seconds.") and the worker taps again.
+- What to watch: the share of 503s per route in `/metrics`, and `busy: N requests in flight` lines (at most one per
+  worker every 10 s). A few in a burst are the protection working. Steady 503 `busy` means the API needs more
+  workers or VMs (steps 1, 3 and 6 above). Steady `db_busy` with the API's CPU low means MongoDB is the limit (step 4).
+- Raise `MAX_IN_FLIGHT` only together with `MONGO_MAX_POOL_SIZE`. Above twice the pool, requests only wait longer
+  for a connection.
+
 **Capacity log**
 
 | Date | Commit | Server | Run | Bills/s reached | p95 POST /invoices | Errors | Notes |

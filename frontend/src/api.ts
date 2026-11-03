@@ -6,7 +6,12 @@
 // scan back, so the app always gets the answer or that error). No reply in time is a TimeoutError (code "timeout"),
 // no connection an ApiError with code "network"; both have status 0.
 // A caller's own signal (React Query passes one) cancels a request that is no longer needed, e.g. an older search.
+// A server that is overloaded answers 503 at once (code "busy", or "db_busy" when the database was too slow) with
+// Retry-After: the request is sent again after that wait, at most BUSY_TRIES times in all, when it is safe to repeat
+// (sync-policy.ts busyRetry; a bill keeps its Idempotency-Key). If it is still busy, the server's short message shows.
 import i18n from "i18next";
+
+import { BUSY_TRIES, busyRetry, busyWaitMs, retryAfterMs } from "@/src/sync-policy";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 export const API = `${BASE}/api`;
@@ -33,10 +38,14 @@ export function setOnUnauthorized(fn: (() => void) | null) {
 }
 
 export class ApiError extends Error {
+  retryAfterMs: number | null = null; // the server's Retry-After, in ms
   constructor(message: string, public status: number, public code = "", public params: Record<string, unknown> = {}) {
     super(message);
   }
 }
+
+// The server was too busy to answer (503), even after the tries request() makes by itself.
+export const serverBusy = (e: unknown) => e instanceof ApiError && e.status === 503;
 
 // The server didn't answer in time. The request may still have reached it (see the bill's Idempotency-Key in order.ts).
 export class TimeoutError extends ApiError {
@@ -52,7 +61,36 @@ export type RequestOptions = { signal?: AbortSignal; timeoutMs?: number; headers
 
 const failed = (status: number) => i18n.t("Something went wrong. Please try again. (Error {{status}})", { status });
 
+// Waits ms, or until the caller cancels (then fails with the cancel reason, as fetch would).
+function pause(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const stop = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", stop);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", stop, { once: true });
+  });
+}
+
 async function request(method: string, path: string, body?: unknown, opts: RequestOptions = {}) {
+  const keyed = !!opts.headers?.["Idempotency-Key"];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await requestOnce(method, path, body, opts);
+    } catch (e) {
+      const again = e instanceof ApiError && attempt + 1 < BUSY_TRIES && busyRetry(e.status, e.code, method, keyed);
+      if (!again || opts.signal?.aborted) throw e;
+      await pause(busyWaitMs(attempt, e.retryAfterMs), opts.signal);
+    }
+  }
+}
+
+async function requestOnce(method: string, path: string, body?: unknown, opts: RequestOptions = {}) {
   const headers: Record<string, string> = { ...opts.headers };
   const sent = token; // a reply to a request sent before the saved login came back must not log out
   if (sent) headers.Authorization = `Bearer ${sent}`;
@@ -85,7 +123,9 @@ async function request(method: string, path: string, body?: unknown, opts: Reque
       }
     } catch {}
     if (res.status === 401 && sent && sent === token && onUnauthorized) onUnauthorized();
-    throw new ApiError(msg, res.status, code, params);
+    const err = new ApiError(msg, res.status, code, params);
+    err.retryAfterMs = retryAfterMs(res.headers.get("Retry-After"));
+    throw err;
   }
   try {
     return await res.json();

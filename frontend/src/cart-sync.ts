@@ -3,7 +3,8 @@
 //   killing the app or losing the network loses nothing; they come back when the app starts again.
 // - The server gets each customer's order 1.5 s after the last change (SAVE_AFTER_MS), at once when the worker moves
 //   to another customer or the app goes to the background. A send that fails is tried again with backoff
-//   (sync-policy.ts), when the phone is back online, and when the app comes back to the foreground; one that the
+//   (sync-policy.ts; never sooner than a busy server's Retry-After, after api.ts's own tries), when the phone is back
+//   online, and when the app comes back to the foreground; one that the
 //   server refuses (a 4xx other than 408/429) is dropped. Either way the order shows "Not saved" until a save lands.
 // - "Outbox": per customer, the latest thing to send, either their order (put) or its removal (drop). A newer change
 //   replaces an older one that hasn't gone yet, so only the latest version is ever sent.
@@ -191,6 +192,7 @@ export class CartSync {
     do {
       this.again = false;
       let retry = false;
+      let notBefore = 0; // the longest Retry-After a busy server asked for in this round
       for (const cid of Object.keys(this.outbox)) {
         if (this.stopped) return;
         if (!onlineManager.isOnline()) return; // the online event starts it again
@@ -206,6 +208,7 @@ export class CartSync {
         } catch (e) {
           this.failed.add(cid);
           if (retryable(e instanceof ApiError ? e.status : -1)) retry = true;
+          if (e instanceof ApiError && e.retryAfterMs) notBefore = Math.max(notBefore, e.retryAfterMs);
           else if (this.outbox[cid] === p) delete this.outbox[cid]; // refused as it is; the next change tries again
         } finally {
           this.inflight = null;
@@ -214,7 +217,7 @@ export class CartSync {
         }
       }
       if (retry && !this.stopped) {
-        this.retryTimer = setTimeout(() => this.pump(), backoffMs(this.attempt++));
+        this.retryTimer = setTimeout(() => this.pump(), Math.max(backoffMs(this.attempt++), notBefore));
         return;
       }
     } while (this.again);
