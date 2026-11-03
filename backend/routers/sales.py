@@ -55,6 +55,7 @@ import storage_client
 from common import date_key, money, new_id, normalize_in_phone, now_iso
 from db import get_db, in_transaction
 from errors import AppError
+from fast_json import respond
 from routers import carts, customers
 from routers.business import shop_upis
 from routers.products import context
@@ -443,7 +444,7 @@ async def create_invoice(body: InvoiceIn, response: Response, user: dict = Depen
             return done
         raise
     await notify_after(db, user["business_id"], changes)
-    return _shown(invoice)
+    return _shown(invoice)  # not through fast_json: one per bill, ~0.1 ms of encoding next to its transaction
 
 
 # ---- Correcting or cancelling a bill (the owner only) ----
@@ -645,7 +646,7 @@ async def get_invoice(invoice_id: str, user: dict = Depends(auth.require("sell")
     """`shop` is the shop's name, address and phone today, for the top of the in-app bill (like the printed one)."""
     inv = await _get_invoice(user, invoice_id)
     biz = await get_db().businesses.find_one({"id": user["business_id"]}, {"_id": 0, "name": 1, "address": 1, "phone": 1}) or {}
-    return {**_shown(inv), "shop": {k: biz.get(k) or "" for k in ("name", "address", "phone")}}
+    return respond({**_shown(inv), "shop": {k: biz.get(k) or "" for k in ("name", "address", "phone")}})
 
 
 # ---- The customer's bill link (/i/{token}, sent on WhatsApp; no login)

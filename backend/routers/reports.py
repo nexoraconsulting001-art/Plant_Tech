@@ -22,6 +22,7 @@ import auth
 import rollups
 from common import date_key, money, now_ist
 from db import get_db
+from fast_json import respond
 from routers.sales import DATE, LIVE, _filters, _scope, _sees_all, _summary, date_q, method_q
 from units import DECIMAL_UNITS, unit_of
 
@@ -135,7 +136,7 @@ async def today(user: dict = Depends(auth.require("sell"))):
         out["below_zero"] = [{**p, "unit": unit_of(p.get("unit"))} for p in below]
         out["below_zero_count"] = await db.products.count_documents(q)
         out.update(await _low_stock(db, user["business_id"]))
-    return out
+    return respond(out)  # fast_json: Home asks for this after every bill
 
 
 async def _low_stock(db, business_id: str) -> dict:

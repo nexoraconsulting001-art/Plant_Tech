@@ -25,6 +25,7 @@ import audit
 import auth
 from common import Throttle, name_key, new_id, normalize_in_phone, now_iso
 from db import get_db, in_transaction
+from fast_json import respond
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
 
@@ -187,14 +188,15 @@ async def find(q: str = "", user: dict = Depends(auth.require("sell", "customers
     fields = {"_id": 0, "id": 1, "name": 1, "phone": 1, "purchase_count": 1, "last_purchase_at": 1}
     live = {"business_id": bid, "erased_at": None}
     if not q.strip():
-        return await db.customers.find(live, fields).sort("last_purchase_at", -1).limit(FIND_MAX).to_list(FIND_MAX)
+        return respond(await db.customers.find(live, fields).sort("last_purchase_at", -1).limit(FIND_MAX)
+                       .to_list(FIND_MAX))
     ors = _search(q)
     if ors is None:
-        return []
+        return respond([])
     await _fill_search_fields(db, bid)
     found = await db.customers.find({**live, "$or": ors}, fields).limit(FIND_MAX).to_list(FIND_MAX)
     found.sort(key=lambda c: c.get("last_purchase_at") or "", reverse=True)
-    return found
+    return respond(found)
 
 
 @router.post("")

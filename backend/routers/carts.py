@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 import auth
 from db import get_db
+from fast_json import respond
 from units import check_quantity, unit_of
 
 router = APIRouter(prefix="/api/orders/cart", tags=["orders"])
@@ -77,16 +78,16 @@ async def get_cart(customer_id: str = Query(min_length=1, max_length=64), user: 
     db = get_db()
     c = await db.carts.find_one({"business_id": user["business_id"], "customer_id": customer_id}, {"_id": 0})
     if not c:
-        return None
+        return respond(None)
     updated = _when(c["updated_at"])
     if updated < datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS):
         await clear(db, user["business_id"], customer_id)
-        return None
+        return respond(None)
     items = c.get("items", [])
     units = await _product_units(db, user["business_id"], [i.get("product_id") or "" for i in items])
     items = [{**i, "unit": units[i["product_id"]]} if i.get("product_id") in units else i for i in items]
-    return {"items": items, "discount": c.get("discount", 0), "gst_removed": c.get("gst_removed", False),
-            "updated_at": updated.isoformat()}
+    return respond({"items": items, "discount": c.get("discount", 0), "gst_removed": c.get("gst_removed", False),
+                    "updated_at": updated.isoformat()})
 
 
 @router.put("")
@@ -95,7 +96,7 @@ async def save_cart(body: CartIn, user: dict = Depends(auth.require("sell"))):
     await _own_customer(db, user["business_id"], body.customer_id)
     if not body.items:
         await clear(db, user["business_id"], body.customer_id)
-        return None
+        return respond(None)
     units = await _product_units(db, user["business_id"], [i.product_id for i in body.items])
     for i in body.items:
         i.unit = units.get(i.product_id) or unit_of(i.unit)  # a deleted product keeps what the app sent
@@ -105,8 +106,8 @@ async def save_cart(body: CartIn, user: dict = Depends(auth.require("sell"))):
            "items": [i.model_dump() for i in body.items], "discount": body.discount, "gst_removed": body.gst_removed,
            "updated_at": now.isoformat(), "saved_at": now, "updated_by": {"id": user["id"], "name": user.get("name", "")}}
     await db.carts.replace_one({"business_id": user["business_id"], "customer_id": body.customer_id}, doc, upsert=True)
-    return {"items": doc["items"], "discount": body.discount, "gst_removed": body.gst_removed,
-            "updated_at": now.isoformat()}
+    return respond({"items": doc["items"], "discount": body.discount, "gst_removed": body.gst_removed,
+                    "updated_at": now.isoformat()})
 
 
 @router.delete("")

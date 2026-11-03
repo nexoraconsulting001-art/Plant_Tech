@@ -20,6 +20,7 @@ import catalog_search
 from catalog_search import FIELDS, library_images
 from common import name_key, new_id, now_iso
 from db import get_db
+from fast_json import respond
 from routers import library
 from stock import STOCK_EPS, record_stock, settle_stock  # noqa: F401 (also imported from here by older code)
 from units import Unit, is_plant_category, unit_of
@@ -166,7 +167,8 @@ async def list_products(search: str = "", category_id: str = "", low: bool = Fal
     """Without `limit` or `cursor`: an array as always (every product by name; a search: the best matches).
     With them: one page, {"items": [...], "next_cursor": "…" or null}, by name (a search: the best `limit`
     matches, no next page). `ids` (comma separated) = just these products, e.g. the fresh stock of an order's
-    items before paying. `category` is the same as `category_id`; `low` = at or below the alert level."""
+    items before paying. `category` is the same as `category_id`; `low` = at or below the alert level.
+    Answered through fast_json (the busiest route: every keystroke of a search)."""
     db = get_db()
     where: dict = {}
     if ids:
@@ -180,17 +182,17 @@ async def list_products(search: str = "", category_id: str = "", low: bool = Fal
         lib: dict = {}
         found = await catalog_search.find_products(db, user["business_id"], search, limit or SEARCH_MAX, where, lib)
         items = await views(db, user, found, lib)
-        return {"items": items, "next_cursor": None} if paged else items
+        return respond({"items": items, "next_cursor": None} if paged else items)
     q = {**where, "business_id": user["business_id"], "deleted_at": None}
     if not paged:
-        return await views(db, user, await db.products.find(q, FIELDS).sort("name", 1).to_list(5000))
+        return respond(await views(db, user, await db.products.find(q, FIELDS).sort("name", 1).to_list(5000)))
     size = limit or PAGE_SIZE
     if cursor:
         q = {"$and": [q, _after(cursor)]}
     page = await db.products.find(q, FIELDS).sort([("name", 1), ("id", 1)]).limit(size + 1).to_list(size + 1)
     more = len(page) > size
     page = page[:size]
-    return {"items": await views(db, user, page), "next_cursor": _cursor(page[-1]) if more else None}
+    return respond({"items": await views(db, user, page), "next_cursor": _cursor(page[-1]) if more else None})
 
 
 _search = catalog_search.search_products  # moved; the old name stays for older imports
