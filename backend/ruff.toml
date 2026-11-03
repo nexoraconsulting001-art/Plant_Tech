@@ -7,9 +7,3 @@ target-version = "py312"
 [lint]
 select = ["E4", "E7", "E9", "F"]
 ignore = ["E741"]  # `l` for a bill line is the house style
-
-[lint.per-file-ignores]
-# Unused imports in files other work packages own (WP-10 demo_data.py, suppliers.py). Drop these lines once
-# those files lose the imports; until then CI stays green without touching their files.
-"demo_data.py" = ["F401"]
-"routers/suppliers.py" = ["F401"]
