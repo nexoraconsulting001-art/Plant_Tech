@@ -2,7 +2,8 @@
 // Owner: the shop closes now (everyone is logged out) and is erased after a waiting period; logging in again
 // before then keeps it. Bills, supplier bills and stock records that GST law says must be kept go to a locked
 // archive first. Employee: only their own login is erased, at once; the shop keeps the bills they made.
-// Confirmed by typing the phone number and the password or PIN (the server checks both it knows about).
+// Confirmed by typing the phone number and the password or PIN; an owner without a password signs in with Google
+// again (the server checks the password or the Google account).
 import { useState } from "react";
 import { View } from "react-native";
 import { Redirect, useRouter } from "expo-router";
@@ -14,6 +15,7 @@ import { useAuth } from "@/src/auth";
 import { confirm, notice } from "@/src/confirm";
 import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, Field, Header, Icon, PhoneField, Screen, T } from "@/src/components/ui";
+import { googleAvailable, signInWithGoogle } from "@/src/google";
 import { resetTo } from "@/src/nav";
 import { colors, radius, spacing } from "@/src/theme";
 
@@ -40,7 +42,8 @@ export default function DeleteAccount() {
     if (!sure) return;
     setBusy(true);
     try {
-      const out = await deleteAccount({ confirm_phone: phone, password, reason: reason.trim() });
+      const id_token = !user?.has_password && googleAvailable ? await signInWithGoogle() : undefined;
+      const out = await deleteAccount({ confirm_phone: phone, password, id_token, reason: reason.trim() });
       const until = out.erase_after
         ? new Date(out.erase_after).toLocaleDateString(i18n.language === "hi" ? "hi-IN" : "en-IN", { day: "numeric", month: "long", year: "numeric" })
         : "";

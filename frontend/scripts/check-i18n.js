@@ -42,12 +42,16 @@ for (const m of ["Cash", "UPI", "Card"]) add(m, "payment methods");
 const business = fs.readFileSync(path.join(BACKEND, "routers", "business.py"), "utf8");
 const block = business.match(/SUGGESTED_CATEGORIES = \[([\s\S]*?)\]/)[1];
 for (const m of block.matchAll(/\("([^"]+)",/g)) add(m[1], "suggested categories");
+// GET /business gst_warning: the shop's saved GSTIN is missing or invalid (WP-9)
+const gstWarnings = business.match(/GST_WARNINGS = \{([\s\S]*?)\}/)[1];
+for (const m of gstWarnings.matchAll(/:\s*"([^"]+)"/g)) add(m[1], "GST warnings");
 
 // ---- server messages
 const py = [...files(BACKEND, [".py"])].filter((f) => !f.includes(`${path.sep}tests${path.sep}`));
 for (const file of py) {
   const src = fs.readFileSync(file, "utf8");
-  const re = new RegExp(String.raw`(?:HTTPException\(\d+,|AppError\(\d+,|BadImage\(|AIUnavailable\()\s*` + PY_STRS, "g");
+  // gstr.py's warning(code, text) notes on the GST returns (WP-10) are shown like AppError messages
+  const re = new RegExp(String.raw`(?:HTTPException\(\d+,|AppError\(\d+,|BadImage\(|AIUnavailable\(|\bwarning\("\w+",)\s*` + PY_STRS, "g");
   for (const m of src.matchAll(re)) {
     const text = [...m[1].matchAll(new RegExp(STR, "g"))].map((s) => unquote(s[1])).join("");
     add(text, path.relative(path.join(ROOT, ".."), file));

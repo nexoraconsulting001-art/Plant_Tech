@@ -15,6 +15,7 @@ import { useToast } from "@/src/components/toast";
 import { BottomBar, Button, Field, Icon, T } from "@/src/components/ui";
 import { formatCurrency } from "@/src/format";
 import { pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
+import { LONG_EDGE } from "@/src/image-tools";
 import { colors, radius, spacing } from "@/src/theme";
 import { isPlantCategory, roundQty, Unit, UNITS, unitName, unitShort, wholeUnit } from "@/src/units";
 
@@ -52,7 +53,7 @@ export function ProductForm({ initial, isNew, onSave, saving, extra }: {
   const count = whole ? digits : num; // stock typed in whole numbers for pieces
 
   async function photo(source: "camera" | "gallery") {
-    const out = source === "camera" ? await takePhoto({ aspect: 1 }) : await pickFromGallery({ aspect: 1 });
+    const out = source === "camera" ? await takePhoto({ aspect: 1, longEdge: LONG_EDGE.plant }) : await pickFromGallery({ aspect: 1, longEdge: LONG_EDGE.plant });
     if (out.status === "denied") toast.show(t("Please allow camera and photo access for Hara Hisaab in your phone settings."), "error");
     if (out.status !== "ok") return;
     setUploading(true);

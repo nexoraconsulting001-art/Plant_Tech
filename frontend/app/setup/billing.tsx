@@ -60,7 +60,7 @@ function BillingStep({ biz }: { biz: Business }) {
         {gst && (
           <>
             <Field label={t("GST number")} value={gstin} onChangeText={(v) => setGstin(v.toUpperCase())} autoCapitalize="characters"
-              maxLength={15} placeholder="06ABCDE1234F1Z5" error={gstinBad ? t("This does not look like a valid GST number") : undefined} />
+              maxLength={15} placeholder="06ABCDE1234F1Z4" error={gstinBad ? t("This does not look like a valid GST number") : undefined} />
             <T v="small" style={{ color: colors.inkSoft }}>
               {t("The GST % is set per category in the next step. Prices you type include GST.")}
             </T>

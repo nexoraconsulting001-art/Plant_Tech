@@ -54,7 +54,7 @@ function FormSheet({ visible, onClose, supplier, onSaved }: Props) {
       <Field label={t("Name")} value={v.name} onChangeText={(name) => set({ name })} autoCapitalize="words" testID="supplier-form-name" />
       <Field label={t("Phone")} value={v.phone} onChangeText={(phone) => set({ phone })} keyboardType="phone-pad" testID="supplier-form-phone" />
       <Field label={t("GST number")} value={v.gstin} onChangeText={(g) => set({ gstin: g.toUpperCase() })} autoCapitalize="characters" maxLength={15}
-        placeholder="06ABCDE1234F1Z5" error={gstinBad ? t("This does not look like a valid GST number") : undefined} />
+        placeholder="06ABCDE1234F1Z4" error={gstinBad ? t("This does not look like a valid GST number") : undefined} />
       <Field label={t("Address")} value={v.address} onChangeText={(address) => set({ address })} multiline />
       <Field label={t("Notes (optional)")} value={v.notes} onChangeText={(notes) => set({ notes })} multiline
         placeholder={t("Contact person, bank or UPI details, payment terms")} />

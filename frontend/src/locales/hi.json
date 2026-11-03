@@ -219,7 +219,7 @@
   "Phone number (used to log in)": "फ़ोन नंबर (लॉग इन के लिए)",
   "PIN or password": "पिन या पासवर्ड",
   "New PIN (leave blank to keep the current one)": "नया पिन (पुराना रखना हो तो खाली छोड़ें)",
-  "At least 4 digits": "कम से कम 4 अंक",
+  "At least 6 digits": "कम से कम 6 अंक",
   "What can {{name}} do?": "{{name}} क्या-क्या कर सकते हैं?",
   "Can log in": "लॉग इन कर सकते हैं",
   "Turn off when they leave": "काम छोड़ने पर बंद करें",

@@ -11,7 +11,8 @@ export type CaptureOutcome =
   | { status: "ok"; result: CaptureResult }
   | { status: "denied"; canAskAgain: boolean }
   | { status: "cancelled" };
-export type CaptureOptions = Pick<CropOptions, "aspect" | "title" | "hint">; // aspect 1 = square (product photos)
+// aspect 1 = square (product photos). longEdge: LONG_EDGE.plant for plant and product photos; bills keep the default.
+export type CaptureOptions = Pick<CropOptions, "aspect" | "title" | "hint"> & { longEdge?: number };
 
 const PICK: ImagePicker.ImagePickerOptions = { mediaTypes: ["images"], quality: 1, allowsEditing: false, exif: false };
 
@@ -27,7 +28,7 @@ async function capture(source: "camera" | "gallery", options: CaptureOptions = {
     if (res.canceled || !res.assets?.[0]) return { status: "cancelled" };
     const picked = await normalize(res.assets[0].uri);
     const answer = await cropImage(picked, options);
-    if (answer.kind === "use") return { status: "ok", result: await cropAndShrink(picked, answer.rect) };
+    if (answer.kind === "use") return { status: "ok", result: await cropAndShrink(picked, answer.rect, options.longEdge) };
     if (answer.kind === "cancel") return { status: "cancelled" };
     // Retake: open the camera (or gallery) again.
   }
@@ -53,7 +54,7 @@ export async function pickPages(limit: number, options: CaptureOptions = {}):
       secondary: assets.length > 1 ? i18n.t("Skip page") : undefined,
     });
     if (answer.kind === "cancel") break;
-    if (answer.kind === "use") results.push(await cropAndShrink(picked, answer.rect));
+    if (answer.kind === "use") results.push(await cropAndShrink(picked, answer.rect, options.longEdge));
   }
   return results.length ? { status: "ok", results } : { status: "cancelled" };
 }

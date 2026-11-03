@@ -149,6 +149,9 @@ jobs:
         run: npx eslint app src
       - name: Every text has a Hindi translation
         run: npm run i18n:check
+      - name: Unit tests (order save rules, paged lists)
+        # Node 22 runs the .ts modules they import only with type stripping on
+        run: node --test --experimental-strip-types tests/sync-policy.test.mjs scripts/test-paging.mjs
       - name: expo-doctor
         # Not blocking yet: it fails on Expo patch releases (expo, expo-router, expo-sharing were one patch behind
         # on 2 Nov 2026). Make it blocking once package.json is current (npx expo install --check).

@@ -1,5 +1,5 @@
-// Change your own password (owner, 8+ characters) or PIN (worker, 4+). Logs out your other phones (and takes
-// them off the owner's notifications).
+// Change your own password (owner, 8+ characters) or PIN (worker, 6+, as the server asks of new PINs). Logs out
+// your other phones (and takes them off the owner's notifications).
 import { useState } from "react";
 import { useRouter } from "expo-router";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -21,7 +21,7 @@ export default function ChangePassword() {
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");
   const [busy, setBusy] = useState(false);
-  const min = isOwner ? 8 : 4;
+  const min = isOwner ? 8 : 6;
   const word = isOwner ? t("password") : t("PIN");
   const ok = (!user?.has_password || current.length > 0) && next.length >= min && next === again;
 

@@ -15,6 +15,7 @@ import { useToast } from "@/src/components/toast";
 import { Button, Field, Header, Icon, Screen, T, Thumb } from "@/src/components/ui";
 import { formatQty } from "@/src/format";
 import { takePhoto } from "@/src/hooks/useImageCapture";
+import { LONG_EDGE } from "@/src/image-tools";
 import { colors, radius, spacing } from "@/src/theme";
 import type { LibraryEntry, Product } from "@/src/types";
 import { isPlantCategory } from "@/src/units";
@@ -46,7 +47,7 @@ export default function NewProduct() {
   }
 
   async function scan() {
-    const out = await takePhoto({ aspect: 1 });
+    const out = await takePhoto({ aspect: 1, longEdge: LONG_EDGE.plant });
     if (out.status === "denied") toast.show(t("Please allow camera and photo access for Hara Hisaab in your phone settings."), "error");
     if (out.status !== "ok") return;
     setScanning(true);

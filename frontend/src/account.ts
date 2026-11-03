@@ -10,7 +10,8 @@ import { storage } from "@/src/utils/storage";
 
 const TOKEN_KEY = "nurserypos_token_v1"; // the same key as src/auth.tsx
 
-export type DeleteAccountIn = { confirm_phone?: string; password?: string; reason?: string };
+// id_token: a Google-only owner (no password) confirms with a fresh Google sign-in instead.
+export type DeleteAccountIn = { confirm_phone?: string; password?: string; id_token?: string; reason?: string };
 // Owner: the shop closes now and is erased after the waiting period. Employee: their login is erased at once.
 export type DeleteAccountOut = { status?: "scheduled" | "erased" | string; erase_after?: string; grace_days?: number };
 

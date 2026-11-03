@@ -25,6 +25,7 @@ import { useToast } from "@/src/components/toast";
 import { Badge, BottomBar, Button, Field, Header, Icon, Screen, SearchBox, Segmented, Stepper, T, Thumb } from "@/src/components/ui";
 import { formatCurrency, formatQty, formatQtyUnit } from "@/src/format";
 import { CaptureResult, pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
+import { LONG_EDGE } from "@/src/image-tools";
 import { askOwner, shortWarning } from "@/src/stock";
 import { colors, radius, spacing, touch } from "@/src/theme";
 import type { Product } from "@/src/types";
@@ -52,7 +53,7 @@ export default function OrderScan() {
   const [focusSearch, setFocusSearch] = useState(0);
 
   async function capture(source: "camera" | "gallery") {
-    const out = source === "camera" ? await takePhoto({ aspect: 1 }) : await pickFromGallery({ aspect: 1 });
+    const out = source === "camera" ? await takePhoto({ aspect: 1, longEdge: LONG_EDGE.plant }) : await pickFromGallery({ aspect: 1, longEdge: LONG_EDGE.plant });
     if (out.status === "denied") {
       toast.show(t("Please allow camera and photo access for Hara Hisaab in your phone settings."), "error");
       return;

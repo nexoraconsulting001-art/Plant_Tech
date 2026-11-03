@@ -17,6 +17,7 @@ import type { Worker } from "@/src/types";
 
 type Perms = Worker["permissions"];
 const DEFAULT: Perms = { sell: true, stock: true, customers: true, reports: false };
+const MIN_PIN = 6; // as the server (auth.MIN_PIN): new and changed PINs; older 4-digit ones keep working until changed
 
 export default function StaffEdit() {
   const { t } = useTranslation();
@@ -43,7 +44,7 @@ function WorkerForm({ worker }: { worker?: Worker }) {
   const [busy, setBusy] = useState(false);
 
   const phone10 = normalizePhone(phone);
-  const ok = !!name.trim() && (isNew ? !!phone10 && pin.length >= 4 : pin.length === 0 || pin.length >= 4);
+  const ok = !!name.trim() && (isNew ? !!phone10 && pin.length >= MIN_PIN : pin.length === 0 || pin.length >= MIN_PIN);
   const first = name.trim().split(" ")[0] || t("this employee");
 
   const PERMS: { p: keyof Perms; label: string; hint: string }[] = [
@@ -90,7 +91,7 @@ function WorkerForm({ worker }: { worker?: Worker }) {
           <View><T v="label">{t("Phone number (used to log in)")}</T><T v="bodyLarge">{formatPhone(worker!.phone)}</T></View>
         )}
         <Field label={isNew ? t("PIN or password") : t("New PIN (leave blank to keep the current one)")} value={pin} onChangeText={setPin}
-          keyboardType="number-pad" maxLength={12} placeholder={t("At least 4 digits")} testID="staff-pin" inputStyle={{ letterSpacing: 4, fontSize: 24 }} />
+          keyboardType="number-pad" maxLength={12} placeholder={t("At least 6 digits")} testID="staff-pin" inputStyle={{ letterSpacing: 4, fontSize: 24 }} />
 
         <View style={{ gap: spacing.xs, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.page }}>
           <T v="label">{t("What can {{name}} do?", { name: first })}</T>

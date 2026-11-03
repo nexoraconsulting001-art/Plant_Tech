@@ -13,6 +13,7 @@ import { Sheet } from "@/src/components/sheet";
 import { useToast } from "@/src/components/toast";
 import { Badge, Button, Chip, EmptyState, ErrorView, Field, Header, Icon, LoadingView, Screen, SearchBox, T, thumbUrl } from "@/src/components/ui";
 import { pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
+import { LONG_EDGE } from "@/src/image-tools";
 import { colors, radius, spacing } from "@/src/theme";
 import type { LibraryEntry } from "@/src/types";
 
@@ -126,7 +127,7 @@ function EntrySheet({ entry: e, onClose }: { entry: LibraryEntry; onClose: () =>
   }
 
   async function photo(source: "camera" | "gallery") {
-    const out = source === "camera" ? await takePhoto({ aspect: 1 }) : await pickFromGallery({ aspect: 1 });
+    const out = source === "camera" ? await takePhoto({ aspect: 1, longEdge: LONG_EDGE.plant }) : await pickFromGallery({ aspect: 1, longEdge: LONG_EDGE.plant });
     if (out.status !== "ok") return;
     act(source, () => apiPost(`/admin/library/${e.id}/photo`, { image_base64: out.result.base64 }), t("Picture updated"));
   }
