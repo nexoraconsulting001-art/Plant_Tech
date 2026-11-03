@@ -588,8 +588,8 @@ def test_worker_runs_the_summary_and_the_heartbeat(client, monkeypatch):
     import worker
 
     assert {"deliver_push", "check_push_receipts"} <= {f.__name__ for f in worker.WorkerSettings.functions}
-    [cron] = worker.WorkerSettings.cron_jobs
-    assert cron.name == "tick" and cron.unique and cron.second == 0
+    [cron] = [c for c in worker.WorkerSettings.cron_jobs if c.name == "tick"]  # the daily crons are tested in test_worker_wiring
+    assert cron.unique and cron.second == 0
     pings, runs = [], []
     monkeypatch.setattr(push, "http", lambda: _expo({}, pings))
     monkeypatch.delenv("HEARTBEAT_URL", raising=False)

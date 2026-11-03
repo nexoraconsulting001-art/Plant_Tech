@@ -91,6 +91,10 @@ def test_unknown_numbers_look_the_same(client, monkeypatch):
 
 def test_brute_force_is_throttled_per_phone_and_per_ip(client):
     Shop(client)
+    # the per-number limit is a sliding window counter: tries that straddle a new minute are weighted down, so
+    # start well inside a minute to keep the count exact
+    if time.time() % 60 > 45:
+        time.sleep(60.2 - time.time() % 60)
     # a script going fast at one number: after 5 wrong ones every try is refused before a password is checked,
     # and past the per-number limit even that check is skipped
     answers = [client.post("/api/auth/login", json={"phone": "9811122334", "password": f"guess{i}"}).json()

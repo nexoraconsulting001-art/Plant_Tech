@@ -22,7 +22,6 @@ import test_sales as sales_tests
 import test_short_stock as short_stock_tests
 from common import IST, date_key, money, new_id, now_ist
 from conftest import MOCK, Shop, run
-from routers import sales
 from routers.reports import _report_buckets
 from routers.sales import LIVE, _filters, _first_billed, _scope, _sees_all, _summary
 from units import count, unit_of
