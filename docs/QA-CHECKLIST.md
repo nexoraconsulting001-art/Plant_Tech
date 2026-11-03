@@ -376,7 +376,7 @@ Owner A adds employee W (Employees → Manage → Add employee). Test with W log
 ## R. Release to production (after staging passes)
 | # | Steps | Expected | P | ✅/❌ | Notes |
 |---|---|---|---|---|---|
-| R.1 | Before merging to `main`: prod `.env` has JWT_SECRET, PUBLIC_BASE_URL, ADMIN_PHONES, AI_DAILY_LIMIT | All set (Claude checks names only) | 1 | | |
+| R.1 | Before merging to `main`: prod `.env` has JWT_SECRET, PUBLIC_BASE_URL, ADMIN_PHONES (for migration 0801), AI_DAILY_LIMIT; after the deploy `python -m manage_users admin list` shows the admin (else `admin grant`, RUNBOOK "App admins") | All set (Claude checks names only) | 1 | | |
 | R.2 | Prod data wipe done if wanted | Prod database empty except the shared library | 1 | | |
 | R.3 | After deploy: sign up on prod, one bill end to end | Works; bill link uses the prod address | 1 | | |
 | R.4 | Old prod APK users | Must install the new prod app (old one stops working) | 1 | | |

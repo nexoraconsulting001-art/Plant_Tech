@@ -123,11 +123,15 @@ async def login(body: LoginIn):
     if not phone:
         raise wrong
     await ratelimit.consume(f"login-phone:{phone}", LOGIN_PHONE_RATE)
-    if wait := await auth.login_wait(db, phone):
-        raise auth.too_many_tries(wait)
-    user = await db.users.find_one({"phone": phone}, {"_id": 0})
-    # Same work for a number with no account (a throwaway hash), so the answer time gives nothing away.
-    if not await auth.check_password_async(body.password, (user or {}).get("password_hash")):
+    await auth.reserve_login(db, phone)  # one check per phone at a time; 429 while it must wait
+    try:
+        user = await db.users.find_one({"phone": phone}, {"_id": 0})
+        # Same work for a number with no account (a throwaway hash), so the answer time gives nothing away.
+        right = await auth.check_password_async(body.password, (user or {}).get("password_hash"))
+    except BaseException:
+        await auth.login_done(db, phone)
+        raise
+    if not right:
         failed, wait = await auth.login_failed(db, phone)
         if user:
             target = {"type": "user", "id": user["id"]}
@@ -137,6 +141,7 @@ async def login(body: LoginIn):
                                 business_id=user["business_id"])
         raise wrong
     if not user.get("active", True):
+        await auth.login_done(db, phone)
         raise HTTPException(403, "This login has been turned off. Please contact the shop owner.")
     await auth.clear_login_failures(db, phone)
     return await _logged_in(db, user, "phone")

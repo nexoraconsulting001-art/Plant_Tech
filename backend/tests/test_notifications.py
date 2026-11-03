@@ -542,13 +542,29 @@ def test_removing_a_phone_needs_a_login(client):
     assert client.post("/api/push-tokens/remove", json={"token": TOKEN}).status_code == 401
     forged = {"Authorization": "Bearer forged"}
     assert client.post("/api/push-tokens/remove", headers=forged, json={"token": TOKEN}).status_code == 401
-    other = Shop(client, phone="9822200011", name="Mohan")
-    r = client.post("/api/push-tokens/remove", headers=other.h, json={"token": TOKEN})  # another shop's login
-    assert r.status_code == 200 and r.json()["removed"] == 0
-    assert shop.get("/api/notifications/settings").json()["phones"] == 1
     assert client.post("/api/push-tokens/remove", json={"token": "x" * 301}).status_code == 422
+    assert shop.get("/api/notifications/settings").json()["phones"] == 1
     r = client.post("/api/push-tokens/remove", headers=shop.h, json={"token": TOKEN})
     assert r.json() == {"ok": True, "removed": 1}
+
+
+def test_a_phone_that_changed_shops_stops_the_first_shops_alerts(client):
+    """Review fix: owner A's logout never reached the server (offline); then an employee of shop B logs in on that
+    phone. The app removes the token it holds and forgets it on a 200, so the server must really remove it."""
+    shop = Shop(client)
+    _sign_up(shop)
+    other = Shop(client, phone="9822200011", name="Mohan")
+    _, employee = other.worker()
+    r = client.post("/api/push-tokens/remove", headers=employee, json={"token": TOKEN})
+    assert r.status_code == 200 and r.json() == {"ok": True, "removed": 1}
+    assert shop.get("/api/notifications/settings").json()["phones"] == 0
+    logged = run(db_module.state.db.audit_log.find_one({"action": "push.remove_other_shop"}, {"_id": 0}))
+    assert logged["business_id"] == other.get("/api/auth/me").json()["business"]["id"]
+    # Removing other shops' phones is limited per login (a script guessing tokens gets nowhere anyway).
+    for i in range(10):
+        _sign_up(shop, f"ExponentPushToken[other-shop-{i:04d}]")
+        assert client.post("/api/push-tokens/remove", headers=employee,
+                           json={"token": f"ExponentPushToken[other-shop-{i:04d}]"}).status_code == (200 if i < 9 else 429)
 
 
 def test_an_expired_login_still_removes_its_own_phone(client, monkeypatch):

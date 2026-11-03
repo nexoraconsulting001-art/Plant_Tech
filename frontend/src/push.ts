@@ -64,7 +64,7 @@ export async function registerPush(ask: boolean): Promise<PushState> {
 }
 
 // Stop this phone's notifications (logging out, or someone other than an owner logged in on it).
-// The server needs no login for this (an expired login still logs out). The saved token is forgotten only
+// The server needs a login (any valid one, or this person's expired one). The saved token is forgotten only
 // once the server has removed it: offline, the next login tries again (syncPush). Logging out never waits.
 export async function unregisterPush() {
   if (!NATIVE) return;

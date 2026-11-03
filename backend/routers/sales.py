@@ -20,14 +20,18 @@ selling the last plant), so nothing in it may act outside the database; the owne
 the commit. Everything that can be checked first (products, customer, quantities) is checked before it starts.
 
 Retries: the app may send an `Idempotency-Key` header (any unique string, e.g. a UUID per bill attempt) with
-POST /invoices and /correct. The key is saved in the bill's transaction; the same key again returns the bill it
-made (header `Idempotent-Replayed: true`) instead of a second bill. Without the header (app 1.1.0) nothing changes.
+POST /invoices and /correct. The key is the first thing the bill's transaction saves; the same key again returns the
+bill it made (header `Idempotent-Replayed: true`) instead of a second bill, also when the two arrive at once. The
+same key with a changed order is refused (409 idempotency_mismatch, naming the bill that was made). Without the
+header (app 1.1.0) nothing changes.
 
 Bill numbers: INV-0001 onwards, one series per shop (decision D7 may change it to one per financial year). The
 counter moves inside the bill's transaction, so a failed bill takes its number back and the series has no gaps;
 a unique index on {business_id, invoice_number} (migration 0101) makes a duplicate impossible.
 """
 import base64
+import hashlib
+import json
 import os
 import re
 import secrets
@@ -93,27 +97,24 @@ IdempotencyKey = Header(None, alias="Idempotency-Key", min_length=8, max_length=
 KEY_KEEP_DAYS = 7  # how long a key is remembered (TTL index on idempotency_keys.created_at, migration 0103)
 
 
-def price_lines(lines: list[dict], discount: float) -> dict:
-    """Prices include GST. Spread any discount over the lines, then split out each line's tax:
-    tax = amount * rate / (100 + rate). Returns the totals and a per-rate GST breakup."""
+def price_lines(lines: list[dict], discount: float, *, inter_state: bool = False) -> dict:
+    """Prices include GST. gst.split spreads any discount over the lines and splits each line's value into taxable
+    value + tax (CGST + SGST, or IGST to another state; Decimal, half up), and the bill saves exactly that: each
+    line's `net` (after the discount) and `tax`, plus `cgst`/`sgst`/`igst` on taxed lines, and the per-rate GST
+    breakup as their sums. The printed bill, the app, the exports and GSTR-1 read these (gst.saved_split)."""
     subtotal = sum(l["price"] * l["quantity"] for l in lines)
     discount = min(discount, subtotal)
-    factor = (subtotal - discount) / subtotal if subtotal else 1
-    breakup: dict[float, dict] = {}
-    for l in lines:
+    grand_total = money(subtotal - discount)
+    split = gst.split(lines, discount, total=grand_total, inter_state=inter_state)
+    for l, t in zip(lines, split.lines):
         l["amount"] = money(l["price"] * l["quantity"])
-        net = l["price"] * l["quantity"] * factor
-        rate = l.get("gst_percent", 0)
-        tax = net * rate / (100 + rate) if rate else 0
-        l["net"], l["tax"] = money(net), money(tax)
-        if rate:
-            b = breakup.setdefault(rate, {"rate": rate, "taxable": 0.0, "tax": 0.0})
-            b["taxable"] += net - tax
-            b["tax"] += tax
-    gst = [{"rate": b["rate"], "taxable": money(b["taxable"]), "tax": money(b["tax"])}
-           for b in sorted(breakup.values(), key=lambda b: b["rate"])]
-    return {"subtotal": money(subtotal), "discount": money(discount), "grand_total": money(subtotal - discount),
-            "gst_breakup": gst, "gst_total": money(sum(b["tax"] for b in gst))}
+        l["net"], l["tax"] = float(t.value), float(t.tax)
+        if t.taxed:
+            l["cgst"], l["sgst"], l["igst"] = float(t.cgst), float(t.sgst), float(t.igst)
+    breakup = [{"rate": gst.number(r["rate"]), "taxable": float(r["taxable"]), "tax": float(r["tax"])}
+               for r in split.by_rate if r["rate"] > 0]
+    return {"subtotal": money(subtotal), "discount": money(discount), "grand_total": grand_total,
+            "gst_breakup": breakup, "gst_total": float(split.tax), "inter_state": inter_state}
 
 
 def _sees_all(user: dict) -> bool:
@@ -154,6 +155,7 @@ class _Bill:
     """Everything a new bill needs, checked before anything is changed (stock, customers, bill numbers)."""
     cats: dict
     gst_registered: bool
+    composition: bool  # a composition shop collects no tax: every line is saved at 0% (gst.py)
     gst_removed: bool
     allow_short: bool
     products: dict
@@ -198,7 +200,9 @@ async def _prepare(db, user: dict, body: InvoiceIn) -> _Bill:
                             "created_at": now_iso(), **customers.search_fields(body.customer_name.strip(), phone)}
     # "Bill without GST" stays as it is until the owner decides (D6); BILL_WITHOUT_GST=0 turns it off for everyone.
     gst_removed = body.gst_removed and get_settings().bill_without_gst and gst_registered and auth.can(user, "owner")
-    return _Bill(cats=cats, gst_registered=gst_registered, gst_removed=gst_removed,
+    biz = await db.businesses.find_one({"id": bid}, {"_id": 0, "gst_registered": 1, "gst_scheme": 1}) or {}
+    return _Bill(cats=cats, gst_registered=gst_registered, composition=gst.scheme(biz) == "composition",
+                 gst_removed=gst_removed,
                  allow_short=body.allow_short and auth.can(user, "owner"),  # the role decides, never the app alone
                  products=products, units=units, paid_to=paid_to, customer=customer, new_customer=new_customer)
 
@@ -298,7 +302,8 @@ def _lines(body: InvoiceIn, bill: _Bill, short: dict[str, float]) -> list[dict]:
         p = bill.products.get(l.product_id) if l.product_id else None
         cat = bill.cats.get(p.get("category_id")) if p else None
         line = {"product_id": l.product_id, "name": l.name.strip(), "quantity": l.quantity, "unit": unit, "price": l.price,
-                "gst_percent": (cat or {}).get("gst_percent", 0) if bill.gst_registered and not bill.gst_removed else 0,
+                "gst_percent": (cat or {}).get("gst_percent", 0) if bill.gst_registered and not bill.gst_removed
+                and not bill.composition else 0,
                 "cost_price": (p or {}).get("cost_price", 0)}
         if p:  # HSN and the exempt flag as on the day, like the rate (gst.py; printed and in GSTR-1)
             line["hsn"] = gst.line_hsn(p, cat)
@@ -329,7 +334,7 @@ async def _save(db, session, user: dict, body: InvoiceIn, bill: _Bill, short: di
                 **extra) -> dict:
     """Write the bill (and its new customer, if any) and add it to the customer's totals."""
     lines = _lines(body, bill, short)
-    totals = price_lines(lines, body.discount)
+    totals = price_lines(lines, body.discount)  # same state: bills carry no place of supply yet (gst.is_inter_state)
     customer = await _customer_for(db, session, bill)
     customer_id, customer_name, phone = customer["id"], customer["name"], customer.get("phone", "")
     bid = user["business_id"]
@@ -353,18 +358,41 @@ async def _save(db, session, user: dict, body: InvoiceIn, bill: _Bill, short: di
 
 # ---- Idempotency-Key (see the module notes)
 
-async def _claim_key(db, session, user: dict, key: str | None, route: str, invoice_id: str):
-    """Saved last in the bill's transaction, so only a bill that went through uses up its key (also on a laptop
-    without transactions). A second request with the same key at the same moment fails here with a duplicate key
-    and gets the first one's bill (_replayed)."""
-    if key:
-        await db.idempotency_keys.insert_one({"business_id": user["business_id"], "key": key, "route": route,
-                                              "invoice_id": invoice_id, "user_id": user["id"],
-                                              "created_at": datetime.now(timezone.utc)}, session=session)
+def _fingerprint(body: InvoiceIn) -> str:
+    """What the bill is: its lines, customer, discount, payment method and GST choice. Not allow_short or upi_id:
+    "Bill anyway" resends the same order with allow_short, and that must still find the bill."""
+    seen = body.model_dump(include={"items", "customer_id", "customer_name", "customer_phone", "discount",
+                                    "payment_method", "gst_removed"})
+    return hashlib.sha256(json.dumps(seen, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-async def _replayed(db, user: dict, key: str | None, route: str, response: Response) -> dict | None:
-    """The bill an earlier request with this key made, or None (a new key, or no key)."""
+def _keyed(db, user: dict, key: str | None, route: str, invoice_id: str, fingerprint: str, work):
+    """work(session) behind the Idempotency-Key. The key is the first write of the bill's transaction: a second
+    request with the same key while the first is still running write-conflicts on it and is retried, and once the
+    first has committed it gets a duplicate key and the first one's bill (_replayed), never out_of_stock or
+    bill_cancelled from what the first one changed. A bill that fails takes its key back with the transaction;
+    on a laptop without transactions the key is removed by hand."""
+    async def run(session):
+        if key:
+            await db.idempotency_keys.insert_one({"business_id": user["business_id"], "key": key, "route": route,
+                                                  "invoice_id": invoice_id, "user_id": user["id"],
+                                                  "fingerprint": fingerprint,
+                                                  "created_at": datetime.now(timezone.utc)}, session=session)
+        try:
+            return await work(session)
+        except BaseException:
+            if key and session is None:
+                await db.idempotency_keys.delete_one({"business_id": user["business_id"], "key": key,
+                                                      "invoice_id": invoice_id})
+            raise
+    return run
+
+
+async def _replayed(db, user: dict, key: str | None, route: str, response: Response,
+                    fingerprint: str | None = None) -> dict | None:
+    """The bill an earlier request with this key made, or None (a new key, or no key). The same key with a
+    different order (changed after a try that got no answer) is a 409 `idempotency_mismatch` naming the bill that
+    was made, so the app can show it instead of taking it for the changed order."""
     if not key:
         return None
     k = await db.idempotency_keys.find_one({"business_id": user["business_id"], "key": key}, {"_id": 0})
@@ -375,6 +403,10 @@ async def _replayed(db, user: dict, key: str | None, route: str, response: Respo
     inv = await db.invoices.find_one({"business_id": user["business_id"], "id": k["invoice_id"]}, {"_id": 0})
     if not inv:  # the bill was removed since (demo data): the key stays used
         raise AppError(409, "This request was already used for another bill.", "idempotency_conflict")
+    if fingerprint and k.get("fingerprint") and k["fingerprint"] != fingerprint:  # keys saved before: no fingerprint
+        raise AppError(409, "This order was already billed as {{number}} before your last changes. Those changes "
+                            "are not on that bill.", "idempotency_mismatch", number=inv["invoice_number"],
+                       invoice_id=inv["id"])
     response.headers["Idempotent-Replayed"] = "true"
     return _shown(inv)
 
@@ -387,7 +419,8 @@ def _is_key_clash(e: DuplicateKeyError) -> bool:
 async def create_invoice(body: InvoiceIn, response: Response, user: dict = Depends(auth.require("sell")),
                          idempotency_key: str | None = IdempotencyKey):
     db = get_db()
-    if done := await _replayed(db, user, idempotency_key, "create", response):
+    fingerprint = _fingerprint(body)
+    if done := await _replayed(db, user, idempotency_key, "create", response, fingerprint):
         return done
     bill = await _prepare(db, user, body)
     names = {pid: p["name"] for pid, p in bill.products.items()}
@@ -400,13 +433,13 @@ async def create_invoice(body: InvoiceIn, response: Response, user: dict = Depen
         await write_history(db, move.rows("sale"), session)
         await carts.clear(db, user["business_id"], invoice["customer_id"], session)  # billed: this customer's saved order is done
         await rollups.apply(session, db, invoice, +1)
-        await _claim_key(db, session, user, idempotency_key, "create", invoice_id)
         return invoice, move.changes()
 
     try:
-        invoice, changes = await in_transaction(sell, db)
+        invoice, changes = await in_transaction(
+            _keyed(db, user, idempotency_key, "create", invoice_id, fingerprint, sell), db)
     except DuplicateKeyError as e:
-        if _is_key_clash(e) and (done := await _replayed(db, user, idempotency_key, "create", response)):
+        if _is_key_clash(e) and (done := await _replayed(db, user, idempotency_key, "create", response, fingerprint)):
             return done
         raise
     await notify_after(db, user["business_id"], changes)
@@ -496,9 +529,15 @@ async def correct_invoice(invoice_id: str, body: CorrectIn, response: Response,
     The new bill keeps who made the first one (`created_by`); `corrected_by` is the owner."""
     db = get_db()
     route = f"correct:{invoice_id}"
-    if done := await _replayed(db, owner, idempotency_key, route, response):
+    fingerprint = _fingerprint(body)
+    if done := await _replayed(db, owner, idempotency_key, route, response, fingerprint):
         return done
-    old = await _open_bill(owner, invoice_id)
+    try:
+        old = await _open_bill(owner, invoice_id)
+    except AppError:  # a try with this key may have corrected it a moment ago: that answer, not bill_cancelled
+        if done := await _replayed(db, owner, idempotency_key, route, response, fingerprint):
+            return done
+        raise
     bill = await _prepare(db, owner, body)
     names = {pid: p["name"] for pid, p in bill.products.items()}
     me = {"id": owner["id"], "name": owner.get("name", "")}
@@ -522,13 +561,13 @@ async def correct_invoice(invoice_id: str, body: CorrectIn, response: Response,
         await _take_off_customer(db, session, old)
         await rollups.apply(session, db, old, -1)
         await rollups.apply(session, db, invoice, +1)
-        await _claim_key(db, session, owner, idempotency_key, route, invoice_id_new)
         return invoice, move.changes()
 
     try:
-        invoice, changes = await in_transaction(correct, db)
+        invoice, changes = await in_transaction(
+            _keyed(db, owner, idempotency_key, route, invoice_id_new, fingerprint, correct), db)
     except DuplicateKeyError as e:
-        if _is_key_clash(e) and (done := await _replayed(db, owner, idempotency_key, route, response)):
+        if _is_key_clash(e) and (done := await _replayed(db, owner, idempotency_key, route, response, fingerprint)):
             return done
         raise
     await notify_after(db, owner["business_id"], changes)

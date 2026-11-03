@@ -10,7 +10,9 @@ Cost and safety (docs/PRODUCTION-PLAN.md, WP-6). Every call goes through `_ask`,
   bill pages already normalised at upload sent as they are instead of being re-encoded;
 - waits for a slot (a few calls at a time per process; with REDIS_URL, a limit for all processes together);
 - uses one client with a 60 s timeout (5 s to connect) and 2 retries; each try may take 30 s for a plant or
-  a name look-up and 120 s for a bill;
+  a name look-up and 120 s for a bill, and the whole call, slot wait and retries included, at most TOTAL_TIMEOUT
+  (50 s for a plant, 150 s for a bill: below the app's own limits in frontend/src/api.ts). A call that runs out
+  is "unavailable", so the scan is given back instead of being charged for an answer nobody waits for;
 - writes one ai_calls document per call (model, tokens, cost, latency) and adds the cost to the month.
 
 Models and effort per kind of call come from settings (CLAUDE_MODEL_PLANT / _INVOICE / _NAMES, all defaulting
@@ -19,6 +21,7 @@ refusal fallback is asked for only on models that support it (not Haiku). The fi
 system prompt, the same bytes on every call so they can be cached; what changes per call (the photos, the
 shop's categories, its name) comes after them, in the user turn.
 """
+import asyncio
 import base64
 import io
 import logging
@@ -54,6 +57,9 @@ MAX_IMAGE_PIXELS = 40_000_000  # phones send about 2-12 MP; the app shrinks phot
 IMAGE_FORMATS = ("JPEG", "PNG", "WEBP")
 TIMEOUT = anthropic.Timeout(60.0, connect=5.0)
 CALL_TIMEOUT = {"plant": 30.0, "names": 30.0, "invoice": 120.0}  # seconds per try
+# Seconds for the whole call (slot wait, tries, retries). The app waits 75 s for /ai/ and 180 s for a bill
+# (frontend/src/api.ts): keep these well below, so the app always gets the answer or the error.
+TOTAL_TIMEOUT = {"plant": 50.0, "names": 50.0, "invoice": 150.0}
 CACHE_MIN_TOKENS = 512  # a shorter system prompt is never cached (Sonnet 5.5 / Haiku 5.5 minimum)
 
 # Pillow refuses images over twice this when opening them and warns above it; the warning is an error here.
@@ -346,8 +352,14 @@ async def _ask(kind: str, system: str, prompt: str, images: list[bytes], schema,
 
     try:
         try:
-            async with ai_guard.slot():
-                resp = await _get_client().beta.messages.create(**params)
+            async with asyncio.timeout(TOTAL_TIMEOUT.get(kind, 90.0)):
+                async with ai_guard.slot():
+                    resp = await _get_client().beta.messages.create(**params)
+        except TimeoutError:  # the whole call: the app would have given up (and the user tapped again)
+            logger.error("Claude %s call took over %ss", kind, TOTAL_TIMEOUT.get(kind, 90.0))
+            worked = False
+            await note("timeout", "total_timeout")
+            raise AIUnavailable("Photo recognition is taking too long. Please try again.", code="ai_timeout") from None
         except ai_guard.Busy:
             raise AIUnavailable("Photo recognition is busy. Please try again in a moment.", code="ai_busy",
                                 retry_after=5) from None

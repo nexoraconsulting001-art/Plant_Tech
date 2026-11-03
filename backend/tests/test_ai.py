@@ -457,3 +457,29 @@ def test_migration_merges_old_daily_counts(client):
 
 async def _call_indexes():
     return [i async for i in await db().ai_calls.list_indexes()]
+
+
+def test_a_call_longer_than_the_app_waits_is_given_back(client, monkeypatch):
+    """Review fix: the app gave up after 45 s while a bill read could take 3 x 120 s, and the scan was charged.
+    Now the whole call has a limit below the app's (TOTAL_TIMEOUT); past it the scan is given back."""
+    assert ai_client.TOTAL_TIMEOUT["invoice"] < 180 and ai_client.TOTAL_TIMEOUT["plant"] < 75  # frontend/src/api.ts
+    assert ai_client.TOTAL_TIMEOUT["invoice"] >= ai_client.CALL_TIMEOUT["invoice"]
+
+    async def slow(**params):
+        await asyncio.sleep(5)
+
+    class Slow:
+        class beta:
+            class messages:
+                create = staticmethod(slow)
+
+    monkeypatch.setattr(ai_client, "_client", Slow())
+    monkeypatch.setitem(ai_client.TOTAL_TIMEOUT, "plant", 0.2)
+    shop = Shop(client)
+    started = time.monotonic()
+    r = shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()})
+    assert r.status_code == 503 and r.json()["code"] == "ai_timeout", r.text
+    assert time.monotonic() - started < 4
+    assert _usage(shop)["count"] == 0
+    call = run(db().ai_calls.find_one({"kind": "plant"}, {"_id": 0}))
+    assert call["outcome"] == "timeout"

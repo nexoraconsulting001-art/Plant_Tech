@@ -22,6 +22,7 @@ import test_sales as sales_tests
 import test_short_stock as short_stock_tests
 from common import IST, date_key, money, new_id, now_ist
 from conftest import MOCK, Shop, run
+from routers import sales
 from routers.reports import _report_buckets
 from routers.sales import LIVE, _filters, _first_billed, _scope, _sees_all, _summary
 from units import count, unit_of
@@ -516,3 +517,36 @@ def test_all_dates_summary_of_a_big_shop_is_fast(client, monkeypatch):
     assert took < 0.1, f"all-dates summary took {took * 1000:.0f} ms"
     mine, took = timed(wh)
     assert mine["orders"] == 250_000 and mine["by_method"]["UPI"] == 62_500_000 and took < 0.1
+
+
+def test_rebuild_since_adds_the_bills_an_old_version_made_during_a_deploy(wired):
+    """Review fix: bills the old version saved (no apply()) after migration 0202, and a bill it corrected that
+    keeps an older sale day, are added by `rollups.py rebuild --touched-since <day>` after the swap. Days before
+    that are not read again; other shops get their days rebuilt too."""
+    shop = Shop(wired)
+    rose = shop.product("Rose", 100, 50)
+    _bill(wired, shop.h, [_line(rose, 1)])
+    bid = shop.get("/api/auth/me").json()["business"]["id"]
+    today = now_ist().date()
+    template = run(_db().invoices.find_one({"business_id": bid}, {"_id": 0}))
+
+    def old_version_bill(day, **extra):  # saved straight into the bills, as a version without rollups does
+        run(_db().invoices.insert_one({**template, "id": new_id(), "invoice_number": f"INV-8{new_id()[:3]}",
+                                       "date_key": day.isoformat(), "public_token": new_id(), **extra}))
+
+    old_version_bill(today)
+    old_version_bill(today - timedelta(days=5), status="Cancelled")  # cancelled by a correction during the deploy
+    d5 = (today - timedelta(days=5)).isoformat()
+    run(_db()[rollups.SALES].insert_one({"_id": rollups.day_id(bid, d5), "business_id": bid, "date_key": d5,
+                                         "orders": 1, "paise": 10000}))  # it was live when 0202 ran
+    stale_old = (today - timedelta(days=30)).isoformat()
+    run(_db()[rollups.SALES].insert_one({"_id": rollups.day_id(bid, stale_old), "business_id": bid,
+                                         "date_key": stale_old, "orders": 99, "paise": 1}))
+    assert shop.get("/api/invoices/summary", params={"day": today.isoformat()}).json()["orders"] == 1  # missed
+
+    since = rollups.touched_since(today.isoformat())
+    assert since == (today - timedelta(days=sales.CORRECT_DAYS)).isoformat()
+    assert run(rollups.rebuild(_db(), None, since)) == 2  # today and the cancelled bill's day
+    assert shop.get("/api/invoices/summary", params={"day": today.isoformat()}).json()["orders"] == 2
+    assert run(_db()[rollups.SALES].find_one({"_id": rollups.day_id(bid, (today - timedelta(days=5)).isoformat())})) is None
+    assert run(_db()[rollups.SALES].find_one({"_id": rollups.day_id(bid, stale_old)}))["orders"] == 99  # not read

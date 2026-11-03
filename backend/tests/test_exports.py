@@ -16,6 +16,7 @@ from conftest import MOCK, TEST_DB, Shop, run
 import audit
 import db as db_module
 import demo_data
+import gst
 import jobs
 import retention
 import storage_client
@@ -348,7 +349,7 @@ def test_retention_indexes(client, mongo):
     assert idx["at_1"]["expireAfterSeconds"] == audit.KEEP_DAYS * 86400
     idx = {i["name"]: i for i in mongo[TEST_DB].exports.list_indexes()}
     assert idx["delete_after_1"]["expireAfterSeconds"] == 0 and idx["id_1"]["unique"]
-    assert mongo[TEST_DB].carts.index_information()["updated_at_1"]["expireAfterSeconds"] == 7 * 86400
+    assert mongo[TEST_DB].carts.index_information()["saved_at_1"]["expireAfterSeconds"] == 7 * 86400
     assert "business_id_1_date_key_1" in mongo[TEST_DB].invoices.index_information()
     # running the migration again changes nothing
     run(importlib.import_module("migrations.1001_retention").up(db()))
@@ -374,3 +375,49 @@ def test_demo_refresh_guards(client, monkeypatch):
         run(demo_data.refresh(db(), "9811122334", today=date.today()))
     with pytest.raises(demo_data.NotAllowed, match="production"):
         run(demo_data.seed(db(), "9811122334"))
+
+
+def test_print_app_and_gstr1_show_the_same_gst(client):
+    """Review fix: a bill's GST is split once, when it is made (gst.split: CGST and SGST each rounded), and the
+    saved bill, the app, the printed bill and GSTR-1 all read that. Rs 100 at 18%: 7.63 + 7.63, never 15.25."""
+    shop = Shop(client)
+    pot = shop.product("Ceramic Pot", 100, 50, category="Pots")
+    plant = shop.product("Money Plant", 99.99, 50)
+    one = bill(shop, (pot, 1, 100))
+    line = one["items"][0]
+    assert (line["net"], line["tax"], line["cgst"], line["sgst"], line["igst"]) == (100, 15.26, 7.63, 7.63, 0)
+    assert one["gst_breakup"] == [{"rate": 18, "taxable": 84.74, "tax": 15.26}] and one["gst_total"] == 15.26
+    assert one["inter_state"] is False
+    page = shop.get(f"/api/invoices/{one['id']}/html").text
+    assert page.count("7.63") >= 2 and "84.74" in page and "84.75" not in page
+    # A discounted bill with odd amounts: the print's split is exactly the saved one.
+    two = bill(shop, (pot, 3, 99.99), (plant, 2, 99.99), discount=37.37, phone="9811100002", name="Bina")
+    biz = run(db().businesses.find_one({"id": two["business_id"]}, {"_id": 0}))
+    saved = run(db().invoices.find_one({"id": two["id"]}, {"_id": 0}))
+    printed = gst.split_bill(saved, biz)
+    assert float(printed.value) == saved["grand_total"]
+    for it, t in zip(saved["items"], printed.lines):
+        assert (it["net"], it["tax"], it.get("cgst", 0), it.get("sgst", 0)) == (
+            float(t.value), float(t.tax), float(t.cgst), float(t.sgst))
+    assert saved["gst_total"] == float(printed.tax)
+    doc = shop.get("/api/exports/gstr1", params={"month": MONTH}).json()
+    [row] = doc["b2cs"]
+    taxed = [i for b in (one, saved) for i in b["items"] if i["gst_percent"]]
+    assert row["camt"] == round(sum(i["cgst"] for i in taxed), 2) and row["samt"] == round(sum(i["sgst"] for i in taxed), 2)
+    assert row["txval"] == round(sum(i["net"] - i["tax"] for i in taxed), 2)
+
+
+def test_composition_shop_bills_carry_no_tax_and_gst_returns_refuse_it(client):
+    """Review fix: a composition dealer cannot collect tax, so its bills save none (not only the print), and its
+    returns are CMP-08/GSTR-4, not GSTR-1/3B."""
+    shop = Shop(client)
+    assert shop.c.put("/api/business", headers=shop.h, json={"gst_scheme": "composition"}).status_code == 200
+    pot = shop.product("Ceramic Pot", 118, 50, category="Pots")
+    inv = bill(shop, (pot, 2, 118))
+    assert inv["gst_total"] == 0 and inv["gst_breakup"] == [] and inv["items"][0]["gst_percent"] == 0
+    assert inv["items"][0]["tax"] == 0 and "cgst" not in inv["items"][0]
+    page = shop.get(f"/api/invoices/{inv['id']}/html").text
+    assert "Bill of Supply" in page and "CGST" not in page
+    for path in ("/api/exports/gstr1", "/api/exports/gstr3b"):
+        r = shop.get(path, params={"month": MONTH})
+        assert r.status_code == 400 and r.json()["code"] == "gst_composition", path

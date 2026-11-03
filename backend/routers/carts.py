@@ -5,9 +5,11 @@ bill or discarding her order removes it, and one untouched for 7 days is dropped
 A product line's unit is always the product's own (as on the bill), whatever the app sent: older apps send none,
 and the owner may change a product's unit while an order waits. Loose lines keep the unit they were added with.
 
-`updated_at` is a BSON date, so MongoDB's TTL index (migration 0104) drops an order 7 days after its last save;
-the TTL monitor runs about once a minute, so reading an order also checks its age. The app still gets an ISO
-string, as before. Orders saved by older server versions (string dates) are converted by the same migration."""
+`saved_at` is a BSON date, so MongoDB's TTL index on it (migration 0104) drops an order 7 days after its last
+save; the TTL monitor runs about once a minute, so reading an order also checks its age. `updated_at` stays an ISO
+string, as the previous server version reads and writes it: a rollback runs that version on this data. Drop it
+(read saved_at instead) a release after that version is gone. Orders saved by older versions get saved_at from
+the same migration."""
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -43,7 +45,8 @@ class CartIn(BaseModel):
 
 
 def _when(value) -> datetime:
-    """updated_at as an aware UTC datetime: a BSON date (PyMongo returns it naive, in UTC) or an older ISO string."""
+    """updated_at as an aware UTC datetime: an ISO string, or a BSON date (PyMongo returns it naive, in UTC) that
+    an earlier build of this release wrote."""
     if isinstance(value, str):
         return datetime.fromisoformat(value)
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
@@ -100,7 +103,7 @@ async def save_cart(body: CartIn, user: dict = Depends(auth.require("sell"))):
     now = datetime.now(timezone.utc)
     doc = {"business_id": user["business_id"], "customer_id": body.customer_id,
            "items": [i.model_dump() for i in body.items], "discount": body.discount, "gst_removed": body.gst_removed,
-           "updated_at": now, "updated_by": {"id": user["id"], "name": user.get("name", "")}}
+           "updated_at": now.isoformat(), "saved_at": now, "updated_by": {"id": user["id"], "name": user.get("name", "")}}
     await db.carts.replace_one({"business_id": user["business_id"], "customer_id": body.customer_id}, doc, upsert=True)
     return {"items": doc["items"], "discount": body.discount, "gst_removed": body.gst_removed,
             "updated_at": now.isoformat()}

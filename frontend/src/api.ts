@@ -1,8 +1,10 @@
 // API client. Every request carries the login token; a 401 logs the user out.
 // Server messages are shown in the app's language: `key` + `params` when the server sends them
 // (messages with numbers or names), else the English `detail` is itself the translation key.
-// Every request has a time limit (AbortSignal.timeout): 10 s, 45 s for AI photo reads and photo uploads. No reply in
-// time is a TimeoutError (code "timeout"), no connection an ApiError with code "network"; both have status 0.
+// Every request has a time limit (AbortSignal.timeout): 10 s, 45 s for photo uploads, 75 s for a plant photo and 180 s
+// for a supplier bill (the server gives up on Claude after 50 s and 150 s, ai_client.TOTAL_TIMEOUT, and gives the
+// scan back, so the app always gets the answer or that error). No reply in time is a TimeoutError (code "timeout"),
+// no connection an ApiError with code "network"; both have status 0.
 // A caller's own signal (React Query passes one) cancels a request that is no longer needed, e.g. an older search.
 import i18n from "i18next";
 
@@ -10,8 +12,14 @@ const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 export const API = `${BASE}/api`;
 
 const TIMEOUT_MS = 10_000;
-const SLOW_TIMEOUT_MS = 45_000; // Claude reading a photo or a bill, or a photo going up on a slow connection
-const timeoutFor = (path: string) => (path.startsWith("/ai/") || path.startsWith("/upload") ? SLOW_TIMEOUT_MS : TIMEOUT_MS);
+const UPLOAD_TIMEOUT_MS = 45_000; // a photo going up on a slow connection
+const AI_TIMEOUT_MS = 75_000; // Claude identifying a plant (server limit 50 s)
+const BILL_TIMEOUT_MS = 180_000; // Claude reading a supplier bill of several pages (server limit 150 s)
+const timeoutFor = (path: string) =>
+  path.startsWith("/ai/scan-invoice") ? BILL_TIMEOUT_MS
+    : path.startsWith("/ai/") ? AI_TIMEOUT_MS
+      : path.startsWith("/upload") ? UPLOAD_TIMEOUT_MS
+        : TIMEOUT_MS;
 
 let token: string | null = null;
 let onUnauthorized: (() => void) | null = null;

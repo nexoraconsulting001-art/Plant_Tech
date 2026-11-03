@@ -220,15 +220,24 @@ def test_saved_orders_have_a_date_and_expire(client, mongo):
     if MOCK:
         return
     raw = mongo[TEST_DB].carts.find_one({})
-    assert isinstance(raw["updated_at"], datetime)
+    # Review fix: updated_at stays the ISO string the previous version parses (a rollback runs it on this data);
+    # the TTL index is on saved_at, a date.
+    assert isinstance(raw["saved_at"], datetime) and datetime.fromisoformat(raw["updated_at"])
     ttl = [i for i in mongo[TEST_DB].carts.list_indexes() if "expireAfterSeconds" in i]
-    assert [(list(i["key"]), i["expireAfterSeconds"]) for i in ttl] == [(["updated_at"], 7 * 86400)]
-    # An order saved by an older server (ISO string) is converted by the migration and still read meanwhile.
+    assert [(list(i["key"]), i["expireAfterSeconds"]) for i in ttl] == [(["saved_at"], 7 * 86400)]
+    # An order saved by an older server (ISO string, no saved_at) is read meanwhile and gets saved_at.
     old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-    mongo[TEST_DB].carts.update_one({}, {"$set": {"updated_at": old}})
+    mongo[TEST_DB].carts.update_one({}, {"$set": {"updated_at": old}, "$unset": {"saved_at": ""}})
     assert client.get("/api/orders/cart", headers=shop.h, params={"customer_id": cust["id"]}).json() is not None
     run(importlib.import_module("migrations.0104_carts_ttl").up(db_module.state.db))
-    assert isinstance(mongo[TEST_DB].carts.find_one({})["updated_at"], datetime)
+    raw = mongo[TEST_DB].carts.find_one({})
+    assert raw["updated_at"] == old and isinstance(raw["saved_at"], datetime)
+    # One whose updated_at an earlier build made a date gets its ISO string back.
+    mongo[TEST_DB].carts.update_one({}, {"$set": {"updated_at": datetime.now(timezone.utc)}, "$unset": {"saved_at": ""}})
+    run(importlib.import_module("migrations.0104_carts_ttl").up(db_module.state.db))
+    raw = mongo[TEST_DB].carts.find_one({})
+    assert isinstance(raw["updated_at"], str) and isinstance(raw["saved_at"], datetime)
+    assert datetime.fromisoformat(raw["updated_at"])  # what the previous version runs on it: no TypeError
 
 
 def test_bill_link_headers_expiry_and_new_link(client, monkeypatch):

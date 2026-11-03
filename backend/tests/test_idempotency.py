@@ -119,3 +119,70 @@ def test_keys_are_forgotten_after_a_week(client, mongo):
     assert [(list(i["key"]), i["expireAfterSeconds"]) for i in ttl] == [(["created_at"], sales.KEY_KEEP_DAYS * 86400)]
     unique = [i for i in mongo[TEST_DB].idempotency_keys.list_indexes() if i.get("unique")]
     assert [list(i["key"]) for i in unique] == [["business_id", "key"]]
+
+
+def _owner(shop):
+    me = shop.get("/api/auth/me").json()
+    return run(db_module.state.db.users.find_one({"id": me["id"]}, {"_id": 0}))
+
+
+@needs_rs
+def test_the_same_key_at_once_on_the_last_plant_gets_the_bill_not_out_of_stock(client):
+    """Review fix: the key is claimed first in the transaction, so a duplicate that arrives while the first is
+    still running replays the bill instead of failing on the stock the first one took."""
+    shop = Shop(client)
+    rose = shop.product("Rose", 100, 1)
+    owner = _owner(shop)
+    body = sales.InvoiceIn(items=[sales.LineIn(**_line(rose, 1))], customer_phone="9811100099", customer_name="Anita")
+    key = str(uuid.uuid4())
+
+    async def send():
+        return await asyncio.gather(*[sales.create_invoice(body=body, response=Response(), user=owner,
+                                                           idempotency_key=key) for _ in range(6)],
+                                    return_exceptions=True)
+
+    results = run(send())
+    assert all(isinstance(r, dict) for r in results), results
+    assert {r["invoice_number"] for r in results} == {"INV-0001"}
+    assert _count() == 1 and shop.get(f"/api/products/{rose['id']}").json()["stock"] == 0
+
+
+@needs_rs
+def test_the_same_correction_at_once_gets_the_corrected_bill_not_bill_cancelled(client):
+    shop = Shop(client)
+    rose = shop.product("Rose", 100, 3)
+    old = _bill(shop, [_line(rose, 2)]).json()
+    owner = _owner(shop)
+    body = sales.CorrectIn(items=[sales.LineIn(**_line(rose, 3))], customer_id=old["customer_id"], reason="One more")
+    key = str(uuid.uuid4())
+
+    async def send():
+        return await asyncio.gather(*[sales.correct_invoice(invoice_id=old["id"], body=body, response=Response(),
+                                                            owner=owner, idempotency_key=key) for _ in range(6)],
+                                    return_exceptions=True)
+
+    results = run(send())
+    assert all(isinstance(r, dict) for r in results), results
+    assert {r["invoice_number"] for r in results} == {"INV-0002"}
+    assert _count() == 2 and shop.get(f"/api/products/{rose['id']}").json()["stock"] == 0
+
+
+def test_the_same_key_with_a_changed_order_is_refused_and_names_the_bill(client):
+    """Review fix: the first try was billed but its answer lost; the worker then added a pot or switched to UPI.
+    The same key must not quietly answer with the old bill as if it were the changed order."""
+    shop = Shop(client)
+    rose = shop.product("Rose", 100, 10)
+    pot = shop.product("Pot", 50, 10)
+    key = str(uuid.uuid4())
+    first = _bill(shop, [_line(rose, 1)], key=key).json()
+    for changed in ({"items": [_line(rose, 1), _line(pot, 1)]}, {"items": [_line(rose, 1)], "payment_method": "UPI"},
+                    {"items": [_line(rose, 1)], "discount": 10}):
+        r = _bill(shop, changed.pop("items"), key=key, **changed)
+        assert r.status_code == 409 and r.json()["code"] == "idempotency_mismatch", r.text
+        assert r.json()["params"] == {"number": first["invoice_number"], "invoice_id": first["id"]}
+    assert _count() == 1 and shop.get(f"/api/products/{pot['id']}").json()["stock"] == 10
+    # The same order again still replays; "Bill anyway" (allow_short) and the UPI ID are not part of the order.
+    assert _bill(shop, [_line(rose, 1)], key=key, allow_short=True).json()["id"] == first["id"]
+    # A key saved before fingerprints (no fingerprint) replays as before.
+    run(db_module.state.db.idempotency_keys.update_one({"key": key}, {"$unset": {"fingerprint": ""}}))
+    assert _bill(shop, [_line(rose, 1), _line(pot, 1)], key=key).json()["id"] == first["id"]

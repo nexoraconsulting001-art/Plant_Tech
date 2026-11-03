@@ -36,6 +36,7 @@ from pymongo import ReturnDocument
 
 import audit
 import auth
+import gst
 import gstr
 import jobs
 import ratelimit
@@ -90,6 +91,9 @@ async def _gst_month(owner: dict, month: str) -> gstr.Month:
     biz = await db.businesses.find_one({"id": owner["business_id"]}, {"_id": 0}) or {}
     if not biz.get("gst_registered") or not gstr.state_of(biz.get("gstin")):
         raise AppError(400, "GST returns need the shop's GSTIN. Please add it in Shop details.", "no_gstin")
+    if gst.scheme(biz) == "composition":  # no GSTR-1 or 3B: CMP-08 and GSTR-4, which this app does not make yet
+        raise AppError(400, "A composition shop files CMP-08 and GSTR-4, not GSTR-1 or GSTR-3B. Please ask your CA.",
+                       "gst_composition")
     return await gstr.collect(db, biz, month)
 
 

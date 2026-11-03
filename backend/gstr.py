@@ -5,10 +5,12 @@
     gstr.gstr1_csv(data)      {section: CSV text} in the offline tool's sheet layout (b2b, b2cl, b2cs, ...)
     gstr.gstr3b(data)         table 3.1 and 3.2 totals
 
-What each bill becomes (prices include GST; a line's taxable value is its `net` minus its `tax`, as printed):
+What each bill becomes (prices include GST): each line's taxable value and CGST/SGST/IGST come from
+gst.saved_split, the amounts saved with the bill, which are also what is printed and shown in the app.
 - A bill with the buyer's GSTIN (`customer_gstin`, set once bills can carry one) is B2B; every other bill is B2C.
 - Place of supply: the bill's `place_of_supply` when it has one, else the shop's state (an over-the-counter sale).
-  Same state: CGST + SGST, half each (CGST gets the odd paisa); other state: IGST.
+  Same state: CGST + SGST; other state: IGST (a bill saved with `inter_state` keeps what it was billed as).
+- Composition shops file CMP-08/GSTR-4, not GSTR-1: routers/exports.py refuses them before collect().
 - B2C: inter-state bills over B2CL_LIMIT go to b2cl one by one, the rest are summed per place and rate (b2cs).
 - 0% lines are nil-rated or exempt supplies (table 8, `nil`): `tax_class` on the line, product or category
   ("nil", "exempt", "non_gst"), else "exempt" (live plants, HSN 0602, are exempt).
@@ -32,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+import gst
 from errors import render
 from units import unit_of
 
@@ -149,25 +152,6 @@ class Month:
     warnings: list = field(default_factory=list)
 
 
-def split_tax(tax: Decimal, inter: bool) -> dict:
-    tax = r2(tax)
-    if inter:
-        return {"iamt": tax, "camt": ZERO, "samt": ZERO}
-    half = r2(tax / 2)
-    return {"iamt": ZERO, "camt": half, "samt": tax - half}
-
-
-def _line_tax(line: dict) -> tuple[Decimal, Decimal, Decimal]:
-    """(rate, taxable value, tax) of one bill line, from what was printed on the bill."""
-    rate = d(line.get("gst_percent"))
-    if "net" in line:
-        net, tax = d(line["net"]), d(line.get("tax"))
-    else:  # very old bills: no per-line net; price includes GST, no discount spread
-        net = d(line.get("price")) * d(line.get("quantity"))
-        tax = net * rate / (100 + rate) if rate else ZERO
-    return rate, net - tax, tax
-
-
 async def collect(db, business: dict, month: str) -> Month:
     """Read the month's bills (and the products and categories they name) once, streaming, into a Month."""
     start, end = month_range(month)
@@ -180,7 +164,8 @@ async def collect(db, business: dict, month: str) -> Month:
     no_hsn = without_gst = 0
     late_cancel: list[str] = []
     proj = {"_id": 0, "invoice_number": 1, "date_key": 1, "status": 1, "cancelled_at": 1, "items": 1,
-            "grand_total": 1, "customer_gstin": 1, "customer_name": 1, "place_of_supply": 1, "gst_removed": 1}
+            "grand_total": 1, "discount": 1, "inter_state": 1, "customer_gstin": 1, "customer_name": 1,
+            "place_of_supply": 1, "gst_removed": 1}
     cursor = db.invoices.find({"business_id": bid, "date_key": {"$gte": start, "$lte": end}}, proj).sort("date_key", 1)
     async for inv in cursor.batch_size(500):
         prefix, n = series(inv.get("invoice_number", ""))
@@ -227,22 +212,24 @@ def _add_bill(out: Month, inv: dict, products: dict, cats: dict) -> int:
     if ctin and not GSTIN.match(ctin):
         ctin = ""
     pos = str(inv.get("place_of_supply") or "") or out.state
-    inter = bool(out.state) and pos != out.state
+    split = gst.saved_split(inv, inter_state=bool(out.state) and pos != out.state)  # the amounts as billed and printed
+    inter = split.inter_state
     bill = Bill(number=inv.get("invoice_number", ""), day=inv.get("date_key", ""), value=d(inv.get("grand_total")),
                 pos=pos, inter=inter, ctin=ctin, name=inv.get("customer_name", ""))
     kind = "b2b" if ctin else "b2c"
     no_hsn = 0
-    for line in inv.get("items", []):
+    for line, amounts in zip(inv.get("items", []), split.lines):
         p = products.get(line.get("product_id") or "") or {}
         cat = cats.get(p.get("category_id") or "") or {}
-        rate, txval, tax = _line_tax(line)
+        rate, txval = amounts.rate, amounts.taxable
+        taxes = {"iamt": amounts.igst, "camt": amounts.cgst, "samt": amounts.sgst}
         unit = unit_of(line.get("unit"))
         hsn = str(line.get("hsn") or p.get("hsn") or cat.get("hsn") or "").strip()
         no_hsn += not hsn
         key = (hsn, UQC.get(unit, "OTH"), rate)
         if hsn and key not in out.hsn_desc:
             out.hsn_desc[key] = cat.get("name") or p.get("name") or line.get("name", "")
-        part = Tax(txval=txval, qty=d(line.get("quantity")), val=txval + tax, **(split_tax(tax, inter) if rate else {}))
+        part = Tax(txval=txval, qty=d(line.get("quantity")), val=amounts.value, **(taxes if rate else {}))
         out.hsn[kind][key].add(part)
         if not rate:
             klass = line.get("tax_class") or p.get("tax_class") or cat.get("tax_class") or DEFAULT_ZERO_CLASS
@@ -250,7 +237,7 @@ def _add_bill(out: Month, inv: dict, products: dict, cats: dict) -> int:
             out.nil[(sply, klass if klass in TAX_CLASSES else DEFAULT_ZERO_CLASS)].add(Tax(txval=txval))
             continue
         t = bill.rates.setdefault(rate, Tax())
-        t.add(Tax(txval=txval, **split_tax(tax, inter)))
+        t.add(Tax(txval=txval, **taxes))
     out.bills.append(bill)
     return no_hsn
 

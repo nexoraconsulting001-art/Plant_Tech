@@ -39,6 +39,7 @@ import requests
 from cachetools import TTLCache
 from fastapi import Depends, Header, HTTPException
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 import observability
 from db import get_db
@@ -152,10 +153,14 @@ def check_new_pin(pin: str):
 # Counted per phone number in `login_attempts` (_id = the phone), whether or not it has an account, so the
 # answers never tell which numbers do. Forgotten a day after the last wrong one (TTL index, migration 0803),
 # after a right one, or when the owner sets a new PIN.
+# One password check per phone at a time: reserve_login() claims the phone atomically (checking_until) before the
+# password is checked, and the check's result ends it. Without it, guesses sent in parallel would all pass the
+# wait before the first wrong one was counted (10 guesses per wait instead of 1).
 
 FREE_TRIES = 5  # wrong passwords in a row before the first wait
 FIRST_WAIT = 30  # seconds after the 5th; doubles with each further wrong one
 MAX_WAIT = 15 * 60
+CHECK_HOLD = 30  # seconds a check holds its phone at most (a crashed request); normally until its answer
 
 
 def wait_after(failed: int) -> int:
@@ -174,11 +179,39 @@ async def login_wait(db, phone: str) -> int:
     return max(0, math.ceil((_utc(doc["wait_until"]) - datetime.now(timezone.utc)).total_seconds()))
 
 
+async def reserve_login(db, phone: str):
+    """Claim this phone for one password check, or raise 429: `login_wait` while it must wait after wrong
+    passwords, `login_busy` while another check of it is running. The claim ends with login_failed,
+    clear_login_failures or login_done. An upsert on the phone's _id: when the document exists but is not free,
+    the insert half fails on the _id, so only one of any number of parallel tries gets through."""
+    now = datetime.now(timezone.utc)
+    free = {"$and": [{"$or": [{"wait_until": None}, {"wait_until": {"$lte": now}}]},
+                     {"$or": [{"checking_until": None}, {"checking_until": {"$lte": now}}]}]}
+    try:
+        await db.login_attempts.update_one(
+            {"_id": phone, **free},
+            {"$set": {"checking_until": now + timedelta(seconds=CHECK_HOLD)},
+             "$setOnInsert": {"last_failed_at": now}},  # the TTL field: an abandoned claim is forgotten too
+            upsert=True)
+    except DuplicateKeyError:
+        if wait := await login_wait(db, phone):
+            raise too_many_tries(wait) from None
+        err = AppError(429, "Another login with this number is being checked. Please try again in a moment.",
+                       code="login_busy")
+        err.headers = {"Retry-After": "2"}
+        raise err from None
+
+
+async def login_done(db, phone: str):
+    """End a claim without counting anything (the check failed for another reason)."""
+    await db.login_attempts.update_one({"_id": phone}, {"$unset": {"checking_until": ""}})
+
+
 async def login_failed(db, phone: str) -> tuple[int, int]:
-    """Count a wrong password; returns (wrong ones in a row, seconds to wait now)."""
+    """Count a wrong password (and end the claim); returns (wrong ones in a row, seconds to wait now)."""
     now = datetime.now(timezone.utc)
     doc = await db.login_attempts.find_one_and_update(
-        {"_id": phone}, {"$inc": {"failed": 1}, "$set": {"last_failed_at": now}},
+        {"_id": phone}, {"$inc": {"failed": 1}, "$set": {"last_failed_at": now}, "$unset": {"checking_until": ""}},
         upsert=True, return_document=ReturnDocument.AFTER)
     wait = wait_after(doc["failed"])
     if wait:

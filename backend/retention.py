@@ -4,7 +4,7 @@
 |---|---|---|
 | Bills, purchases, stock history, customers' bills | 8 years (GST, CGST s.36) | never removed here; closed years archived later (P2) |
 | Audit log | 8 years | TTL index on `at` (migration 1001_retention; audit.py) |
-| Saved orders (carts) | 7 days untouched | TTL index on `updated_at` once it is a date (WP-1), and `apply_retention` for the text dates |
+| Saved orders (carts) | 7 days untouched | TTL index on `saved_at` (WP-1), and `apply_retention` on the text `updated_at` |
 | Logs in the database (`ai_calls`, WP-6) | 180 days (CERT-In asks for at least 180) | `apply_retention` |
 | Shop exports | link for EXPORT_LINK_HOURS, file removed after, record after 30 days | routers/exports.py, TTL on `delete_after` |
 | Customers with no purchase for 3 years | anonymised | not done yet: `apply_retention` only counts them (the erase is WP-4's) |

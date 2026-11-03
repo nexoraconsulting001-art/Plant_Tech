@@ -4,8 +4,10 @@ A phone's Expo push token is kept once (`push_tokens`, unique by token) and belo
 signed it up, with the app language on that phone. Only owners can sign a phone up. Signing up, and changing
 the summary settings, also keeps the shop's row in `summary_schedule` (notify.py) up to date.
 
-Removing a token needs a login: the caller's own phone, or a phone of the caller's shop (an employee logging
-in on a phone an owner used stops that owner's notifications there). One narrow exception for apps already in
+Removing a token needs a login. With a valid one the token is removed whoever it belongs to: only the phone it
+was made on (and this server) knows it, and the app removes it when someone else logs in on that phone, even
+someone of another shop after the owner's logout never reached the server. Removing another shop's phone is
+audit-logged and limited to REMOVE_OTHER_RATE per login. One narrow exception for apps already in
 testers' hands, whose logout sends the old login even when it has expired: a login that has expired (or was
 ended by a new password) but is genuinely ours still removes that same person's phones, for LEGACY_GRACE after
 it expired. PUSH_REMOVE_LEGACY=0 turns the exception off once those apps are retired. The answer is always
@@ -21,9 +23,11 @@ import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
+import audit
 import auth
 import notify
 import push
+import ratelimit
 from common import now_iso
 from db import get_db
 
@@ -32,6 +36,7 @@ router = APIRouter(prefix="/api", tags=["notifications"])
 TOKEN_PATTERN = r"^Expo(nent)?PushToken\[[A-Za-z0-9_\-]{8,200}\]$"
 MAX_PHONES = 10  # per owner: older phones are forgotten first
 LEGACY_GRACE = 180 * 86400  # seconds after a login expired that it still removes its own phones
+REMOVE_OTHER_RATE = "10/hour"  # per login: phones of another shop it may remove (a phone that changed hands)
 
 
 class TokenIn(BaseModel):
@@ -96,7 +101,12 @@ async def remove_token(body: TokenOut, authorization: str | None = Header(None))
             raise
         user = None
     if user is not None:
-        match = {"token": body.token, "$or": [{"user_id": user["id"]}, {"business_id": user["business_id"]}]}
+        match = {"token": body.token}
+        row = await db.push_tokens.find_one(match, {"_id": 0, "user_id": 1, "business_id": 1})
+        if row and row.get("user_id") != user["id"] and row.get("business_id") != user["business_id"]:
+            await ratelimit.consume(f"push-remove:{user['id']}", REMOVE_OTHER_RATE)
+            await audit.log(db, user, "push.remove_other_shop", {"type": "user", "id": row.get("user_id")},
+                            {"business_id": row.get("business_id")})
     else:
         user_id = _our_expired_login(authorization[7:].strip())
         if user_id is None:

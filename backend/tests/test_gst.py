@@ -439,3 +439,27 @@ def test_bills_made_in_the_app_carry_hsn_per_line(client):
     run(db.invoices.update_one({"id": inv["id"]}, {"$unset": {"items.$[].hsn": "", "items.$[].exempt": ""}}))
     page = shop.get(f"/api/invoices/{inv['id']}/html").text  # an older bill: today's codes
     assert "0602" in page and "6914" in page and "Exempt" in page
+
+
+def test_saved_split_reads_what_the_bill_saved():
+    """Review fix: printing and GSTR-1 read the amounts saved with the bill instead of working them out again."""
+    from routers.sales import price_lines
+
+    lines = [{"product_id": "p1", "price": 63, "quantity": 1, "gst_percent": 12, "hsn": "6914"},
+             {"product_id": "p2", "price": 250, "quantity": 1, "gst_percent": 0, "hsn": "0602", "exempt": True}]
+    inv = {"items": lines, **price_lines(lines, 0)}
+    assert (lines[0]["net"], lines[0]["tax"], lines[0]["cgst"], lines[0]["sgst"]) == (63, 6.76, 3.38, 3.38)
+    s = gst.saved_split(inv, inter_state=False)
+    assert (s.lines[0].taxable, s.lines[0].cgst, s.lines[0].sgst) == (D("56.24"), D("3.38"), D("3.38"))
+    assert s.lines[1].exempt and s.lines[1].tax == 0 and s.value == D("313")
+    # The place of supply says another state: the same saved tax, as IGST.
+    s = gst.saved_split(inv, inter_state=True)
+    assert (s.lines[0].igst, s.lines[0].cgst, s.lines[0].taxable) == (D("6.76"), 0, D("56.24"))
+    # A bill saved before (one tax rounded as a whole): that tax, CGST gets the odd paisa, as the app showed it.
+    old = {"items": [{"price": 63, "quantity": 1, "gst_percent": 12, "net": 63.0, "tax": 6.75}], "grand_total": 63}
+    s = gst.saved_split(old, inter_state=False)
+    assert (s.lines[0].taxable, s.lines[0].cgst, s.lines[0].sgst) == (D("56.25"), D("3.38"), D("3.37"))
+    assert gst.saved_split(old, inter_state=False, composition=True).tax == 0  # a composition shop collected none
+    # Very old bills without net: split() as before.
+    older = {"items": [{"price": 63, "quantity": 1, "gst_percent": 12}], "grand_total": 63, "discount": 0}
+    assert gst.saved_split(older, inter_state=False).tax == D("6.76")

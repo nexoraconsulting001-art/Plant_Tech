@@ -35,7 +35,8 @@ Avoid deploying production during the evening rush (18:00-21:30 India time) unle
 ### What the VM does (`deploy/deploy.sh <staging|prod>`)
 sync the checkout -> build (or pull from GHCR when `.env` has `IMAGE_SOURCE=ghcr`) -> `python -m settings` ->
 `python -m migrations up` (old version still serving) -> swap `web` and `worker` -> `/readyz` 200 three times in a
-row within 90 s -> otherwise the previous image goes back by itself and the run fails.
+row within 90 s -> otherwise the previous image goes back by itself and the run fails. After a good swap, if a version
+without daily rollups served bills meanwhile (see "Daily rollups" below), it rebuilds them for the days concerned.
 During the swap the API is down for a few seconds; Caddy holds requests for up to 30 s (`lb_try_duration` in
 `deploy/Caddyfile.snippet`) so the app sees a slow request, not an error. Zero-gap deploys need two API instances
 behind the load balancer (scaling step 3).
@@ -50,6 +51,33 @@ behind the load balancer (scaling step 3).
 ```bash
 ~/Plant_Tech-staging/deploy/deploy.sh staging          # or ~/Plant_Tech/deploy/deploy.sh prod
 tail -n 20 ~/.nurserypos/staging/deploy.log
+```
+
+### Daily rollups (`REPORTS_FROM_ROLLUPS`)
+Home's today card, the Orders totals, the sales report and the 9 pm summary read `daily_sales` and
+`daily_item_sales` when `REPORTS_FROM_ROLLUPS=1`. Every bill of this version updates them, but a version without
+`backend/rollups.py` (the one before WP-2) does not. Such a version serves bills while the first deploy migrates, and
+again after a rollback to it. `deploy.sh` notes the first such day in `~/.nurserypos/<target>/rollups-stale-since`.
+After the next good swap it runs `python rollups.py rebuild --touched-since <that day>`. That rebuilds every shop's
+days from that day minus 7 (bills can be corrected for 7 days) and then deletes the note. If the rebuild fails, the
+deploy still keeps the new version but exits 1, and the next deploy tries again. To run it by hand:
+```bash
+cd ~/Plant_Tech/deploy
+docker compose run --rm --no-deps migrate python rollups.py rebuild --touched-since "$(cat ~/.nurserypos/prod/rollups-stale-since)"
+rm ~/.nurserypos/prod/rollups-stale-since
+docker compose run --rm --no-deps migrate python rollups.py rebuild   # every day of every shop (slow; always safe)
+```
+Rebuilding is safe while the app is billing. Until the first rebuild after the first deploy of WP-2 has worked, keep
+`REPORTS_FROM_ROLLUPS` off (the reports then read the bills).
+
+### App admins
+Admin rights (the shared picture library) are a flag on the login. Migration 0801 sets it once for the numbers in
+`ADMIN_PHONES` that already have a login. On a new database, or for a new admin, the person signs up in the app
+first, and then:
+```bash
+cd ~/Plant_Tech/deploy
+docker compose run --rm --no-deps migrate python -m manage_users admin grant <phone>
+docker compose run --rm --no-deps migrate python -m manage_users admin list
 ```
 
 ### One-time GitHub setup (owner)
@@ -82,7 +110,9 @@ docker image ls nurserypos-api                           # images kept: :latest,
 ~/Plant_Tech/deploy/deploy.sh prod rollback <commit sha> # any of those
 ```
 The checkout stays on the new commit, so the next push deploys again: revert the bad commit on `main` (pull
-request) as the follow-up. Over SSH with the deploy key: `ssh ... ubuntu@<vm> "prod rollback"` (once the new
+request) as the follow-up. A rollback to an image from before the worker (no `worker.py`) starts `web` alone. A
+rollback to an image from before the daily rollups notes the day, and the next deploy rebuilds them (section 1,
+Daily rollups). Over SSH with the deploy key: `ssh ... ubuntu@<vm> "prod rollback"` (once the new
 `ci-deploy` is installed).
 
 **The data** (a migration or a bug damaged data): rolling the image back does not undo data changes. Decide with the

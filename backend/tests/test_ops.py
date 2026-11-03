@@ -6,10 +6,13 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 import yaml
+
+from common import IST
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -112,7 +115,9 @@ def test_ci_deploy_runs_only_the_known_commands(tmp_path):
 
 
 # Fake docker: images are files in $FAKE/tags (name -> image id); "compose up" makes the web container run
-# whatever :latest points at; "compose run ... migrate" exits with $MIGRATE_RC; every call is logged.
+# whatever :latest points at; "compose run ... migrate" exits with $MIGRATE_RC (the rollups rebuild with
+# $ROLLUPS_RC); "docker run ... test IMAGE -f FILE" fails for the old image's files listed in $OLD_LACKS;
+# every call is logged.
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE/calls"
 T="$FAKE/tags"; mkdir -p "$T"
@@ -124,12 +129,16 @@ if [ "$1" = compose ]; then
     build) echo sha256:new > "$T/$(key "$PROJECT-api:latest")" ;;
     config) printf 'mongo\nredis\ndata-owner\nmigrate\nweb\nworker\n' ;;
     ps) [ -f "$FAKE/running" ] && echo cid-web ;;
-    run) case "$*" in *settings*) exit "${SETTINGS_RC:-0}" ;; *) exit "${MIGRATE_RC:-0}" ;; esac ;;
+    run) case "$*" in *settings*) exit "${SETTINGS_RC:-0}" ;; *rollups*) exit "${ROLLUPS_RC:-0}" ;;
+           *) exit "${MIGRATE_RC:-0}" ;; esac ;;
     up) case "$*" in *mongo*) exit 0 ;; esac; resolve "$PROJECT-api:latest" > "$FAKE/running" ;;
   esac
   exit 0
 fi
 case "$1" in
+  run) img=$(resolve "${@: -3:1}"); file="${@: -1}"
+       [ "$img" = sha256:old ] && case " ${OLD_LACKS:-} " in *" $file "*) exit 1 ;; esac
+       exit 0 ;;
   inspect) cat "$FAKE/running" ;;
   tag) id=$(resolve "$2"); [ -n "$id" ] || exit 1; echo "$id" > "$T/$(key "$3")" ;;
   image)
@@ -239,6 +248,50 @@ def test_manual_rollback(vm):
     r, calls, running = vm("staging", "rollback")
     assert r.returncode == 0, r.stdout + r.stderr
     assert running == "sha256:old"
+
+
+def _rebuilds(calls):
+    return [c for c in calls if "rollups.py rebuild" in c]
+
+
+def test_bills_of_a_version_without_rollups_are_rebuilt_after_the_swap(vm):
+    """Review fix: the old version bills while the migrations run (after 0202 filled the rollups) and never updates
+    them, so after the swap the days it may have changed are rebuilt; a version with rollups needs nothing."""
+    r, calls, running = vm("staging", OLD_LACKS="rollups.py")
+    assert r.returncode == 0, r.stdout + r.stderr
+    today = datetime.now(IST).date().isoformat()
+    assert _rebuilds(calls) == [f"docker compose run --rm --no-TTY --no-deps migrate python rollups.py rebuild "
+                                f"--touched-since {today}"]
+    assert calls.index("docker compose up -d --no-build --remove-orphans") < calls.index(_rebuilds(calls)[0])
+    assert not (vm.state / "rollups-stale-since").exists()
+    before = len(calls)
+    r, calls, _ = vm("staging")  # now the running version keeps them itself (the call log goes on)
+    assert r.returncode == 0 and _rebuilds(calls[before:]) == []
+
+
+def test_a_failed_rollups_rebuild_keeps_the_new_version_and_is_tried_again(vm):
+    r, calls, running = vm("staging", OLD_LACKS="rollups.py", ROLLUPS_RC="1")
+    assert r.returncode == 1 and running == "sha256:new"
+    assert (vm.state / "good").exists() and (vm.state / "rollups-stale-since").exists()
+    assert "REBUILDING THE DAILY ROLLUPS FAILED" in (vm.state / "deploy.log").read_text()
+    before = len(calls)
+    r, calls, _ = vm("staging")
+    assert r.returncode == 0 and len(_rebuilds(calls[before:])) == 1
+    assert not (vm.state / "rollups-stale-since").exists()
+
+
+def test_a_rollback_to_an_image_before_the_worker_and_rollups(vm):
+    """Review fix: the old image has no worker.py (its worker would crash-loop) and no rollups (its bills are
+    rebuilt after the next deploy)."""
+    r, calls, running = vm("staging", HEALTHY="sha256:old", OLD_LACKS="rollups.py worker.py")
+    assert r.returncode == 1 and running == "sha256:old"
+    assert "docker compose rm --stop --force worker" in calls
+    assert "docker compose up -d --no-build --no-deps web" in calls
+    assert "docker compose up -d --no-build --no-deps web worker" not in calls
+    assert (vm.state / "rollups-stale-since").exists() and _rebuilds(calls) == []
+    before = len(calls)
+    r, calls, running = vm("staging")  # fixed and deployed again: the days the old version billed are rebuilt
+    assert r.returncode == 0 and running == "sha256:new" and len(_rebuilds(calls[before:])) == 1
 
 
 def test_unknown_target_or_action():

@@ -19,15 +19,17 @@ What counts is what the reports always counted: every bill except cancelled ones
 the bill's own fields, never at its status: the caller decides the sign.
 
 Reads come from the rollups only when REPORTS_FROM_ROLLUPS is on; with it off reports.py reads the bills. Every
-place that saves, cancels or corrects a bill calls apply() (sales.py, WP-1). To switch on: deploy the code that
-calls apply(), run `python rollups.py rebuild` (this also covers bills the old version made during the deploy),
-then set REPORTS_FROM_ROLLUPS=1. Anything that writes bills without apply() must rebuild the shop afterwards
+place that saves, cancels or corrects a bill calls apply() (sales.py, WP-1). A version without this module never
+does, so its bills (the old version billing while a deploy migrates, or a rollback) are missing until the days
+are rebuilt: deploy/deploy.sh does that after the swap (`python rollups.py rebuild --touched-since <day>`, the
+days from <day> minus CORRECT_DAYS on) whenever such a version served bills, and keeps trying on later deploys
+until it worked. By hand: `python rollups.py rebuild` (every day) or `--since <date_key>`. Anything that writes bills without apply() must rebuild the shop afterwards
 (`python rollups.py rebuild --business <id>` or `await rollups.rebuild(db, id)`): demo_data.py's seed, refresh and
 remove do.
 """
 import inspect
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from pymongo import UpdateOne
 from pymongo.asynchronous.database import AsyncDatabase
@@ -185,16 +187,34 @@ async def aggregate(coll, pipeline: list, **kw):
     return await cursor if inspect.isawaitable(cursor) else cursor
 
 
-async def rebuild(db, business_id: str | None = None) -> int:
-    """Rebuild every shop-day that has bills or rollups (one shop, or all). Safe to run while the app is billing,
-    and to repeat. Returns how many days were rebuilt."""
+async def _days_since(db, business_id: str, since: str) -> set[tuple[str, str]]:
+    """A shop's days from `since` on that have bills or rollups ({business_id, date_key} index, one shop at a time)."""
     pairs = set()
-    async for g in await aggregate(db.invoices, [{"$match": {"business_id": business_id} if business_id else {}},
-                                                 {"$group": {"_id": {"b": "$business_id", "d": "$date_key"}}}]):
-        if g["_id"].get("b") and g["_id"].get("d"):
-            pairs.add((g["_id"]["b"], g["_id"]["d"]))
-    async for doc in db[SALES].find({"_id": id_range(business_id)} if business_id else {}, {"business_id": 1, "date_key": 1}):
-        pairs.add((doc["business_id"], doc["date_key"]))
+    async for g in await aggregate(db.invoices, [{"$match": {"business_id": business_id, "date_key": {"$gte": since}}},
+                                                 {"$group": {"_id": "$date_key"}}]):
+        if g["_id"]:
+            pairs.add((business_id, g["_id"]))
+    async for doc in db[SALES].find({"_id": id_range(business_id, since)}, {"date_key": 1}):
+        pairs.add((business_id, doc["date_key"]))
+    return pairs
+
+
+async def rebuild(db, business_id: str | None = None, since: str = "") -> int:
+    """Rebuild every shop-day that has bills or rollups (one shop, or all; with `since`, only the days from that
+    date_key on). Safe to run while the app is billing, and to repeat. Returns how many days were rebuilt."""
+    pairs = set()
+    if since:
+        shops = [business_id] if business_id else [b["id"] async for b in db.businesses.find({}, {"_id": 0, "id": 1})]
+        for bid in shops:
+            pairs |= await _days_since(db, bid, since)
+    else:
+        async for g in await aggregate(db.invoices, [{"$match": {"business_id": business_id} if business_id else {}},
+                                                     {"$group": {"_id": {"b": "$business_id", "d": "$date_key"}}}]):
+            if g["_id"].get("b") and g["_id"].get("d"):
+                pairs.add((g["_id"]["b"], g["_id"]["d"]))
+        async for doc in db[SALES].find({"_id": id_range(business_id)} if business_id else {},
+                                        {"business_id": 1, "date_key": 1}):
+            pairs.add((doc["business_id"], doc["date_key"]))
     for bid, day in sorted(pairs):
         await rebuild_day(db, bid, day)
     return len(pairs)
@@ -240,7 +260,15 @@ async def read_items(db, business_id: str, first: str, last: str) -> dict[str, d
     return out
 
 
-if __name__ == "__main__":  # python rollups.py rebuild [--business <id>]   (from backend/)
+def touched_since(day: str) -> str:
+    """The first date_key a version without rollups may have changed from `day` (YYYY-MM-DD, India) on: its own
+    bills, and the bills it cancelled or corrected, which keep their sale day for up to CORRECT_DAYS."""
+    from routers.sales import CORRECT_DAYS  # not at the top: sales.py imports this module
+
+    return (date.fromisoformat(day) - timedelta(days=CORRECT_DAYS)).isoformat()
+
+
+if __name__ == "__main__":  # python rollups.py rebuild [--business <id>] [--since <day> | --touched-since <day>]
     import argparse
     import asyncio
 
@@ -251,10 +279,11 @@ if __name__ == "__main__":  # python rollups.py rebuild [--business <id>]   (fro
 
     async def main(args) -> int:
         db_module.set_appname("hara-hisaab-rollups")
+        since = touched_since(args.touched_since) if args.touched_since else args.since
         try:
             with pymongo.timeout(3600):  # lifts the app's 10 s limit per operation
-                n = await rebuild(db_module.get_db(), args.business or None)
-            print(f"rebuilt {n} shop-day(s)")
+                n = await rebuild(db_module.get_db(), args.business or None, since)
+            print(f"rebuilt {n} shop-day(s)" + (f" from {since}" if since else ""))
             return 0
         finally:
             await db_module.close()
@@ -262,5 +291,10 @@ if __name__ == "__main__":  # python rollups.py rebuild [--business <id>]   (fro
     parser = argparse.ArgumentParser(prog="python rollups.py")
     parser.add_argument("command", choices=["rebuild"])
     parser.add_argument("--business", default="", help="one shop's id (default: every shop)")
+    days = parser.add_mutually_exclusive_group()
+    days.add_argument("--since", default="", type=lambda v: date.fromisoformat(v).isoformat(),
+                      help="only the days from this date_key (YYYY-MM-DD) on")
+    days.add_argument("--touched-since", default="", type=lambda v: date.fromisoformat(v).isoformat(),
+                      help="the days a version without rollups may have changed from this day on (deploy.sh)")
     observability.setup_logging()
     raise SystemExit(asyncio.run(main(parser.parse_args())))

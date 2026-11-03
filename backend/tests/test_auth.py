@@ -311,3 +311,45 @@ def test_otp_is_a_hook_until_decided(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "otp_required", True)
     r = client.post("/api/auth/register", json={"name": "A", "phone": "9811122334", "password": "secret123"})
     assert r.status_code == 503  # switched on before a provider exists: refuses, never lets through unchecked
+
+
+def test_guesses_sent_at_once_get_one_password_check(client, monkeypatch):
+    """Review fix: the wait check and the failure count were not atomic, so 10 parallel guesses all reached bcrypt
+    (10 guesses per wait). Now one check per phone runs at a time; the others are told to try again."""
+    Shop(client)
+    checked = []
+    real = bcrypt.checkpw
+
+    def spy(pw, h):
+        checked.append(pw)
+        time.sleep(0.2)  # a slow check, so the others arrive while it runs
+        return real(pw, h)
+
+    monkeypatch.setattr(bcrypt, "checkpw", spy)
+
+    async def guesses():
+        return await asyncio.gather(*[auth_router.login(auth_router.LoginIn(phone="9811122334", password=f"guess{i}"))
+                                      for i in range(8)], return_exceptions=True)
+
+    results = run(guesses())
+    codes = sorted(str(getattr(r, "code", None) or r.status_code) for r in results)
+    assert len(checked) == 1 and codes == ["401"] + ["login_busy"] * 7, codes
+    busy = next(r for r in results if getattr(r, "code", "") == "login_busy")
+    assert busy.status_code == 429 and busy.headers == {"Retry-After": "2"}
+    doc = run(db_module.state.db.login_attempts.find_one({"_id": "+919811122334"}))
+    assert doc["failed"] == 1 and "checking_until" not in doc  # the claim ended with the wrong password
+    # A claim left behind by a crashed request holds the phone for CHECK_HOLD seconds at most.
+    run(db_module.state.db.login_attempts.update_one({"_id": "+919811122334"},
+                                                     {"$set": {"checking_until": datetime.now(timezone.utc)}}))
+    assert client.post("/api/auth/login", json={"phone": "9811122334", "password": "secret123"}).status_code == 200
+    assert run(db_module.state.db.login_attempts.find_one({"_id": "+919811122334"})) is None
+
+
+def test_a_turned_off_login_ends_its_claim(client):
+    shop = Shop(client)
+    add_worker(shop)
+    workers = shop.get("/api/staff").json()
+    wid = next(w["id"] for w in workers if w.get("role") != "owner")
+    assert shop.c.patch(f"/api/staff/{wid}", headers=shop.h, json={"active": False}).status_code == 200
+    for _ in range(2):  # not "busy" the second time
+        assert client.post("/api/auth/login", json={"phone": "9822233445", "password": PIN}).status_code == 403

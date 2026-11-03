@@ -570,24 +570,24 @@ Acceptance:
 
 ---
 
-## Status (2 Nov 2026)
+## Status (3 Nov 2026)
 
-All fourteen Wave 1 packages are merged into `prod-ready` (in order WP-1 to WP-14, each with `--no-ff`), with integration commits between them for the seams they could not change themselves. Nothing is deployed. The backend suite passes on a local MongoDB replica set (373 tests: 371 pass, 2 skipped because they need `RUN_BENCH=1` or a real Redis). The app checks pass: `tsc`, eslint with 0 errors, `i18n:check` with 0 missing and 0 unused, and the two Node unit-test files. Running `python -m migrations up` twice on a fresh database changes nothing. Running every migration again on a seeded shop also changes nothing.
+All fourteen Wave 1 packages are merged into `prod-ready` (in order WP-1 to WP-14, each with `--no-ff`), with integration commits between them for the seams they could not change themselves. Nothing is deployed. The backend suite passes on a local MongoDB replica set (387 tests after the review fixes: 385 pass, 2 skipped because they need `RUN_BENCH=1` or a real Redis). The app checks pass: `tsc`, eslint with 0 errors, `i18n:check` with 0 missing and 0 unused, and the two Node unit-test files. Running `python -m migrations up` twice on a fresh database changes nothing. Running every migration again on a seeded shop also changes nothing.
 
 Done = built and its acceptance checks pass here. Partly = built, but some acceptance checks need staging, a phone, a real Redis, or an owner's input.
 
 | WP | Status | What remains |
 |---|---|---|
 | WP-0 Platform foundation | Done (merged before Wave 1) | Run the 1.1.0 regression on staging. Check that a test error reaches Sentry with the release SHA once a DSN is set. |
-| WP-1 Sale integrity | Partly | k6 at 20 bills/s was never run. Locally, 20 bills at once across 10 shops reached p95 817 ms; run k6 on staging-sized hardware. The Orders bill search (`_filters` in `sales.py`) still uses an unanchored `$regex` within one shop's bills, so `test_no_unanchored_regex` still exempts `routers/sales.py`. Wave 2 items are still open: `gst.split` in `price_lines` and D6, walk-in bills (D10), and credit notes. |
-| WP-2 Reports and rollups | Done | `REPORTS_FROM_ROLLUPS` is off by default in the code. `deploy/.env.example` now sets it to 1, because `sales.py` applies the rollups inside each bill's transaction. Turn it on only after migration 0202 has run on that database. |
+| WP-1 Sale integrity | Partly | k6 at 20 bills/s was never run. Locally, 20 bills at once across 10 shops reached p95 817 ms; run k6 on staging-sized hardware. The Orders bill search (`_filters` in `sales.py`) still uses an unanchored `$regex` within one shop's bills, so `test_no_unanchored_regex` still exempts `routers/sales.py`. Wave 2 items are still open: D6, walk-in bills (D10), and credit notes (`gst.split` in `price_lines` is done, see the review fixes below). |
+| WP-2 Reports and rollups | Done | `REPORTS_FROM_ROLLUPS` is off by default in the code. `deploy/.env.example` now sets it to 1, because `sales.py` applies the rollups inside each bill's transaction. Turn it on only after migration 0202 has run and the first deploy's rollups rebuild has worked (`deploy.sh` step 6; RUNBOOK "Daily rollups"). |
 | WP-3 Catalogue | Done | The suggest benchmark was measured locally only (p95 35 ms). |
 | WP-4 Customers and suppliers | Done | Searching by the middle of a name or number no longer matches; this is intended. The `sales.py` regex exemption is listed under WP-1. |
 | WP-5 Worker and notifications | Partly | Never run against a real Redis or arq worker. Prove on staging that the summary goes out exactly once, and that pushes and retries survive a restart. |
 | WP-6 AI cost and safety | Partly | The Haiku accuracy evaluation needs an eval set (200 plant photos, 50 bills) and decision D5. Prompt caching cannot take effect yet, because the shared system prompt (~350 tokens) is below the 512-token minimum. Set `AI_MONTHLY_BUDGET_USD` per decision D4. |
 | WP-7 Files, storage and CDN | Partly | No device check that 1.1.0 photos load through the redirect. Private scans are refused across shops only when the request carries a login. A public bucket and `PUBLIC_IMAGE_BASE_URL` need D1 (domain) and R2 set-up. |
 | WP-8 Auth and account security | Partly | The 100 logins/s figure is in-process only; it needs k6 with 4 workers. OTP is not enforced until D8 is decided and 1.1.0 is retired. Google confirmation on Delete account works once Google sign-in is set up in the app (`src/google.ts`). |
-| WP-9 GST and the tax invoice | Partly | The invoice template, HSN defaults and bill-number format need a CA's sign-off (D7). Bills now store HSN and the exempt flag per line (integration). `gst.split` in the bill and the "Bill without GST" decision (D6) are Wave 2. |
+| WP-9 GST and the tax invoice | Partly | The invoice template, HSN defaults and bill-number format need a CA's sign-off (D7). Bills now store HSN and the exempt flag per line (integration). Bills now save the `gst.split` amounts, and composition shops' bills carry no tax (review fixes). The "Bill without GST" decision (D6) and buyer GSTIN / place of supply on bills (hook step 4) are Wave 2. |
 | WP-10 Compliance data | Partly | GSTR-1 is checked only against a subset of an unofficial schema; GSTN publishes none. Have a CA test an upload in the offline tool. Retention only counts customers due for anonymising; it does not anonymise them yet (D9). |
 | WP-11 CI/CD, deploy, backups | Partly | The CI workflow, Trivy, gitleaks, k6, Caddy, age, rclone and Docker were never run here. Run the restore drill once and record its timing in `docs/RUNBOOK.md`. Make expo-doctor blocking once the Expo patches are current. A deploy with no gap needs a second API instance. |
 | WP-12 App reliability | Partly | Code done. Still to check on a phone: 16 calls or fewer per bill, and that a cart survives the app being killed. |
@@ -607,3 +607,13 @@ Integration fixes made while merging, beyond the merges themselves:
   - The Google `id_token` on Delete account.
   - `check-i18n.js` now also reads the GST warnings.
   - CI runs the app's unit tests.
+
+Review fixes (3 Nov 2026), each with regression tests:
+- Rollups (WP-2, WP-11): the old version keeps billing while migration 0202 runs, and a rollback runs a version without rollups. `deploy.sh` notes the first such day. After the next good swap it runs `python rollups.py rebuild --touched-since <day>` (that day minus `CORRECT_DAYS`, every shop). A failed rebuild keeps the new version, exits 1 and is retried by the next deploy. RUNBOOK has a "Daily rollups" section.
+- Rollback (WP-1, WP-11): carts keep `updated_at` as the ISO string the previous version parses. The 7-day TTL is now on a new `saved_at` date (migrations 0104 and 1001 changed; nothing was deployed). A rollback to an image without `worker.py` starts `web` alone.
+- Idempotency (WP-1, WP-12): the key is the first write of the bill's transaction. Duplicates sent at once now get the bill instead of `out_of_stock` or `bill_cancelled`. The key stores a fingerprint of the order. The same key with a changed order gets 409 `idempotency_mismatch`, naming the bill that was made, and the app opens that bill.
+- GST (WP-1, WP-9, WP-10): `price_lines` saves `gst.split` per line (`net`, `tax`, `cgst`/`sgst`/`igst`) and `inter_state` on the bill. Print and GSTR-1 read the saved amounts (`gst.saved_split`), so print, app, exports and returns agree. A bill of Rs 100 at 18% now carries 15.26 (7.63 + 7.63) instead of 15.25. Composition shops' bills are saved at 0%, and the GSTR exports refuse them (`gst_composition`).
+- Push (WP-5): any valid login removes the push token it sends, as the 1.1.0/1.2.0 apps expect. Removing another shop's phone is audit-logged and limited to 10 an hour per login.
+- Login (WP-8): `auth.reserve_login` claims the phone atomically before bcrypt. Parallel guesses get one check; the rest get 429 `login_busy`. Older 4-digit PINs are not force-reset yet; that needs an owner decision.
+- Admins (WP-8): `ADMIN_PHONES` only flags logins that exist when migration 0801 runs. `.env.example`, RUNBOOK ("App admins") and QA R.1 now say to run `manage_users admin grant` after the admin signs up on a new database.
+- AI (WP-6, WP-12): each Claude call has a total limit, `ai_client.TOTAL_TIMEOUT` (plant 50 s, bill 150 s). When it is hit, the call ends as `ai_timeout` and the scan is given back. The app waits 75 s for `/ai/` and 180 s for `/ai/scan-invoice`.

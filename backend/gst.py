@@ -11,7 +11,11 @@ Template and defaults are pending a CA's sign-off (docs/GST-INVOICE.md); nothing
   may override it (`hsn` on the product). A category can be marked exempt (then its GST is 0%).
 - **split():** prices are tax-inclusive, so a line's value (after its share of the discount) is split into taxable
   value + tax with Decimal and ROUND_HALF_UP. The lines always add up to the bill's total, and the per-rate and
-  per-HSN totals are sums of the lines, so everything reconciles to the paisa.
+  per-HSN totals are sums of the lines, so everything reconciles to the paisa. A new bill is split once, when it
+  is made (sales.price_lines saves each line's value, tax and CGST/SGST/IGST); the print, the app, the exports
+  and GSTR-1 then read those saved amounts (saved_split), so they never differ by a paisa.
+- **Composition shops** collect no tax: their bills are saved with every rate at 0 (sales.py) and print as a
+  Bill of Supply. They file CMP-08/GSTR-4, not GSTR-1, so the GSTR exports refuse them (routers/exports.py).
 - **"Bill without GST" (`gst_removed`, decision D6 still open):** left as it is. Such a bill has every rate at 0
   and prints like a bill of an unregistered shop (title "Bill", no tax). Remove or change it only once the owner
   decides D6 (docs/PRODUCTION-PLAN.md section 4, docs/GST-INVOICE.md).
@@ -316,7 +320,56 @@ def is_inter_state(inv: dict, biz: dict) -> bool:
     return bool(shop_state and pos and pos != shop_state)
 
 
+def number(rate: Decimal) -> int | float:
+    """A rate as JSON wants it: 12 rather than 12.0."""
+    return int(rate) if rate == rate.to_integral_value() else float(rate)
+
+
+def saved_split(inv: dict, *, inter_state: bool, composition: bool = False,
+                codes: dict[str, dict] | None = None) -> Split:
+    """The split of a saved bill from what was saved with it, so the printed bill, the app, the exports and GSTR-1
+    all show the same amounts:
+    - bills saved by sales.price_lines through split() (they have `inter_state`): each line's value (`net`) and
+      its CGST, SGST and IGST as saved (a composition shop's bills are saved without tax);
+    - older bills with a per-line `net` and `tax` (one tax rounded as a whole, as the app showed it): that tax,
+      CGST + SGST half each (CGST gets the odd paisa) or IGST; nothing for a composition shop, which collects none.
+      The same for a saved bill whose place of supply says otherwise than its `inter_state`: its tax stays;
+    - very old bills without `net`: worked out again by split().
+    """
+    items = inv.get("items", [])
+    if not items or any("net" not in l for l in items):
+        return split(items, inv.get("discount", 0), total=inv.get("grand_total"), inter_state=inter_state,
+                     composition=composition, codes=codes)
+    if "inter_state" in inv:
+        composition = False  # as billed
+    saved = "inter_state" in inv and bool(inv["inter_state"]) == inter_state
+    codes = codes or {}
+    out = []
+    for i, l in enumerate(items):
+        known = codes.get(l.get("product_id") or "", {})
+        rate = ZERO if composition else _d(l.get("gst_percent") or 0)
+        exempt = bool(l.get("exempt", known.get("exempt"))) and not _d(l.get("gst_percent") or 0)
+        value = _paise(_d(l["net"]))
+        t = TaxLine(index=i, hsn=l.get("hsn") or known.get("hsn", ""), rate=rate, exempt=exempt, value=value,
+                    taxable=value)
+        if rate > 0:
+            if saved and "cgst" in l:
+                t.cgst, t.sgst, t.igst = (_paise(_d(l.get(k) or 0)) for k in ("cgst", "sgst", "igst"))
+            elif inter_state:
+                t.igst = _paise(_d(l.get("tax") or 0))
+            else:
+                tax = _paise(_d(l.get("tax") or 0))
+                t.cgst = _paise(tax / 2)
+                t.sgst = tax - t.cgst
+            t.taxable = value - t.tax
+        out.append(t)
+    s = Split(lines=out, inter_state=inter_state)
+    s.by_rate = _totals(out, "rate")
+    s.by_hsn = _totals(out, "hsn", "rate")
+    return s
+
+
 def split_bill(inv: dict, biz: dict, codes: dict[str, dict] | None = None) -> Split:
-    """The split of a saved bill, as it is printed."""
-    return split(inv.get("items", []), inv.get("discount", 0), total=inv.get("grand_total"),
-                 inter_state=is_inter_state(inv, biz), composition=scheme(biz) == "composition", codes=codes)
+    """The split of a saved bill, as it is printed (saved_split)."""
+    return saved_split(inv, inter_state=is_inter_state(inv, biz), composition=scheme(biz) == "composition",
+                       codes=codes)

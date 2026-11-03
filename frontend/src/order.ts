@@ -7,7 +7,9 @@
 // over), the owner is told and the correction is dropped.
 // Never billed twice: every try for this order (a retry after no answer, "Bill anyway") sends the same
 // Idempotency-Key (cart.billKey), and the server answers a key it has seen with the bill it already made. Nothing is
-// retried by itself: after no answer the order stays on screen and the worker taps the payment again.
+// retried by itself: after no answer the order stays on screen and the worker taps the payment again. If the order
+// was changed meanwhile (an item added, another payment method) and the first try had been billed after all, the
+// server says so (idempotency_mismatch): the worker is told, and that bill opens instead of the changed order.
 // After the bill (afterBill): only what a bill changes is marked out of date, and the bill screen opens from the answer.
 import { useState } from "react";
 import { useRouter } from "expo-router";
@@ -106,6 +108,15 @@ export function useCreateBill() {
       router.push({ pathname: "/bill/[id]", params: { id: inv.id, done: "1" } });
     } catch (e: any) {
       cart.billFailed(noReply(e));
+      if (e instanceof ApiError && e.code === "idempotency_mismatch" && e.params.invoice_id) {
+        await notice(t("Already billed"), e.message);
+        cart.billed();
+        billChanged(qc);
+        if (fixing) qc.invalidateQueries({ queryKey: ["invoice", fixing.id], refetchType: "none" });
+        router.dismissTo("/(tabs)");
+        router.push({ pathname: "/bill/[id]", params: { id: String(e.params.invoice_id), done: "1" } });
+        return;
+      }
       if (fixing && e instanceof ApiError && (e.code === "bill_cancelled" || e.code === "bill_locked")) {
         await notice(t("This bill can't be corrected"), e.message);
         await cart.discard();

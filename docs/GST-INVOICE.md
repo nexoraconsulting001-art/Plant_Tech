@@ -88,15 +88,17 @@ comment in `invoice_html.render`). Nothing here removes or changes the toggle. W
 ## Wave 2 hooks (for the owner of `sales.py`)
 
 Steps 1 and 2 were done at integration (2 Nov 2026): new bills carry `hsn` and `exempt` per line, and older bills
-print today's codes. Steps 3 and 4 remain.
+print today's codes. Step 3 was done in the review fixes (3 Nov 2026). Step 4 remains.
 
 1. Done. `_lines()`: add to each line `"hsn": gst.line_hsn(p, cat)` and
    `"exempt": bool((cat or {}).get("tax_exempt")) and not line["gst_percent"]` (frozen on the bill, like the rate).
 2. Done. `invoice_page_for_print` and `public_bill`: `codes = await gst.bill_codes(db, inv)` and pass
    `codes=codes` to `invoice_html.render(...)`, so bills saved before step 1 print today's HSN codes.
-3. `price_lines()`: compute the per-line and per-rate tax with `gst.split(lines, discount, total=grand_total,
-   inter_state=..., composition=gst.scheme(biz) == "composition")` instead of floats, so the saved `gst_breakup`
-   and line `tax` equal the printed numbers (today they can differ by a paisa, and a composition shop's saved
-   breakup still shows tax, though its bill does not).
+3. Done. `price_lines()` splits the bill with `gst.split(lines, discount, total=grand_total, inter_state=...)` and
+   saves each line's `net`, `tax` and `cgst`/`sgst`/`igst`, the `gst_breakup` as their sums, and `inter_state` on
+   the bill. A composition shop's lines are saved at 0% (`_lines`). The print (`gst.split_bill`) and GSTR-1
+   (`gstr.py`) read the saved amounts through `gst.saved_split`, so print, app, exports and returns agree to the
+   paisa. Bills saved before keep their one rounded tax (CGST gets the odd paisa). The GSTR exports refuse
+   composition shops (`gst_composition`): they file CMP-08 and GSTR-4. `inter_state` is false until step 4.
 4. Optional buyer fields on `InvoiceIn`: `customer_gstin` (validated with `gst.valid_gstin`) and `place_of_supply`
    (state code). The bill page already uses them when present.

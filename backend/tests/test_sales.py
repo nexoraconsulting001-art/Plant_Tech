@@ -26,7 +26,10 @@ def test_discount_is_spread_before_tax(client):
     shop = Shop(client, gst=True)
     pot = shop.product("Pot", 118, 5, category="Pots")
     inv = _order(shop, [{"product_id": pot["id"], "name": "Pot", "quantity": 1, "price": 118}], discount=18).json()
-    assert inv["grand_total"] == 100 and inv["gst_breakup"][0]["tax"] == 15.25
+    # CGST and SGST are each rounded, as printed and filed (gst.split): 7.63 + 7.63, not one tax of 15.25
+    assert inv["grand_total"] == 100 and inv["gst_breakup"][0]["tax"] == 15.26
+    line = inv["items"][0]
+    assert (line["net"], line["tax"], line["cgst"], line["sgst"], line["igst"]) == (100, 15.26, 7.63, 7.63, 0)
 
 
 def test_no_gst_when_not_registered(client):

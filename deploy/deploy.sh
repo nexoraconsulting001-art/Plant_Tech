@@ -10,6 +10,8 @@
 #   3. check the settings and run the migrations (python -m migrations up) in one-off containers
 #   4. swap web and worker to the new image and wait until /readyz answers 200 several times in a row
 #   5. if any step fails: put the previous image back (and wait until it is ready again), then exit 1
+#   6. after a version without daily rollups served bills (the old one during this deploy, or a rollback), rebuild
+#      the rollups of the days it may have changed (python rollups.py rebuild --touched-since <day>)
 # Migrations must keep working with the previous version (add fields and indexes; remove them a release later),
 # because a rollback runs the old code on the migrated database. See docs/RUNBOOK.md.
 #
@@ -85,11 +87,45 @@ running_image() {  # image ID of the running web container (empty if none)
   if [ -n "$id" ]; then docker inspect -f '{{.Image}}' "$id" 2>/dev/null || true; fi
 }
 
+# Whether an image has a file of the app (WORKDIR /app), e.g. worker.py or rollups.py: older versions lack them.
+has_file() { docker run --rm --no-healthcheck --entrypoint test "$1" -f "$2" >/dev/null 2>&1; }
+
+# Daily rollups (backend/rollups.py): a version without them saves bills that never reach daily_sales and
+# daily_item_sales, so once such a version has served bills (the old one while this deploy migrates, or a
+# rollback), the next good deploy rebuilds the days it may have changed. The marker holds the first such day
+# (India date) and stays until a rebuild worked.
+ROLLUPS_MARK="$STATE/rollups-stale-since"
+mark_rollups_stale() {  # $1: an image that serves bills now
+  if [ ! -s "$ROLLUPS_MARK" ] && ! has_file "$1" rollups.py; then
+    TZ=IST-5:30 date +%F > "$ROLLUPS_MARK"  # India date (POSIX TZ: UTC+5:30, no tz database needed)
+    log "$TARGET: $1 keeps no daily rollups; the next deploy rebuilds them from $(cat "$ROLLUPS_MARK")"
+  fi
+}
+rebuild_rollups() {
+  [ -s "$ROLLUPS_MARK" ] || return 0
+  local since
+  since=$(cat "$ROLLUPS_MARK")
+  if docker compose run --rm --no-TTY --no-deps migrate python rollups.py rebuild --touched-since "$since"; then
+    rm -f "$ROLLUPS_MARK"
+    log "$TARGET: daily rollups rebuilt from $since"
+    return 0
+  fi
+  log "$TARGET: REBUILDING THE DAILY ROLLUPS FAILED (from $since) - see docs/RUNBOOK.md, Daily rollups"
+  return 1
+}
+
 # Back to an earlier image. Web and worker only (--no-deps): the old code must not start the migration runner.
+# An image older than the worker (arq, worker.py) gets web alone: its worker would only crash-loop.
 restore() {
   log "$TARGET: rolling back to $1"
   docker tag "$1" "$IMAGE:latest"
-  docker compose up -d --no-build --no-deps web worker
+  if has_file "$1" worker.py; then
+    docker compose up -d --no-build --no-deps web worker
+  else
+    docker compose rm --stop --force worker >/dev/null 2>&1 || true
+    docker compose up -d --no-build --no-deps web
+  fi
+  mark_rollups_stale "$1"
   if wait_ready; then
     log "$TARGET: rolled back, serving the previous version again"
     return 0
@@ -117,7 +153,10 @@ log "$TARGET: deploying $(git log --oneline -1)"
 
 # What runs now is what a failed deploy goes back to.
 PREVIOUS=$(running_image)
-if [ -n "$PREVIOUS" ]; then docker tag "$PREVIOUS" "$IMAGE:rollback"; fi
+if [ -n "$PREVIOUS" ]; then
+  docker tag "$PREVIOUS" "$IMAGE:rollback"
+  mark_rollups_stale "$PREVIOUS"  # it keeps billing while the migrations run
+fi
 SWAPPED=0
 
 failed() {
@@ -161,6 +200,8 @@ if wait_ready && [ "$(running_image)" = "$NEW" ]; then
   echo "$SHA" > "$STATE/good"
   docker compose logs --tail 6 web || true
   prune_images
+  # 6. The new version is serving and stays; a failed rebuild is repeated by the next deploy, or by hand.
+  rebuild_rollups || { echo "the new version is serving; rebuild the daily rollups: docs/RUNBOOK.md" >&2; exit 1; }
   exit 0
 fi
 
