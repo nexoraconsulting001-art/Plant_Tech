@@ -293,3 +293,4 @@ Connections: `WEB_CONCURRENCY x MONGO_MAX_POOL_SIZE x VMs` must stay well under 
 | Date | Commit | Server | Run | Bills/s reached | p95 POST /invoices | Errors | Notes |
 |---|---|---|---|---|---|---|---|
 | 2026-11-02 | prod-ready + WP-11 | laptop, 1 uvicorn process | locust smoke, 2 bills/s target | 1.84 | 520 ms | 0% | proves the scripts only; not a capacity number |
+| 2026-11-03 | prod-ready 877286b | laptop, 8 logical CPUs shared by MongoDB, 4 uvicorn workers and locust; 1000 shops | locust MULT=1 (14 bills/s), then 3x | 14 at 1x | 840 ms at 1x (p50 160 ms) | 0% at 1x | 3x saturated the laptop at ~300-460 req/s and showed the overload failures fixed the same day (loadtest/README.md); not a capacity number |

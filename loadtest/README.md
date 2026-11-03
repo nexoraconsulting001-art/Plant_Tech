@@ -54,8 +54,25 @@ about 1000 virtual users.
 MULT=3 locust -f loadtest/locustfile.py --host https://<staging api> --headless --processes -1 \
     --csv loadtest/results/locust-3x --html loadtest/results/locust-3x.html
 ```
-Each user makes one bill every `PACE` seconds (default 20), so the shape starts `14 x MULT x PACE` users. On Windows
-`--processes` is not available and gevent needs a short install path; run it from Linux or WSL for the big runs.
+Each user makes one bill every `PACE` seconds (default 20), so the shape starts `14 x MULT x PACE` users.
+
+### Locust on Windows
+Linux or WSL is simpler for the big runs. On Windows itself:
+- **A short venv path.** gevent (locust's dependency) fails to install or import from a deep folder such as the
+  OneDrive project path (Windows path length). Make a venv at a short path and install locust there:
+  `python -m venv C:\lt`, then `C:\lt\Scripts\pip install -r backend\requirements-dev.txt`.
+- **No `--processes`.** Locust cannot fork on Windows, so one process tops out around one CPU core. Start a master
+  and one `--worker` process per core you can spare, each in its own terminal (PowerShell, from the repo root):
+  ```powershell
+  $env:MULT = "1"
+  C:\lt\Scripts\locust -f loadtest\locustfile.py --host http://127.0.0.1:8001 --headless --master `
+      --expect-workers 3 --csv loadtest\results\locust-1x --html loadtest\results\locust-1x.html
+  # in 3 more terminals (each with the same $env:MULT and other settings):
+  C:\lt\Scripts\locust -f loadtest\locustfile.py --worker --master-host 127.0.0.1
+  ```
+  The shape (users, pacing) runs on the master; every worker needs the same environment and `loadtest/shops.json`.
+- The server under test on the same laptop: `uvicorn server:app --port 8001 --workers 4` from `backend/`, with
+  `MONGO_DB=hh_loadtest`, `LOG_FORMAT=json` (as on a server) and the seed's `JWT_SECRET`.
 
 ## 4. What to watch while it runs
 - The API: `docker compose stats`, `/metrics` (request rate, p95 per route), the JSON request log.
@@ -63,6 +80,30 @@ Each user makes one bill every `PACE` seconds (default 20), so the shape starts 
   an index scan on the hot queries is a bug; WP-1 to WP-4 add the indexes).
 - Redis and the worker: queue length should stay near zero.
 Record each run (date, commit, server size, results) in `docs/RUNBOOK.md` under "Capacity".
+
+## Local run (3 Nov 2026, laptop): finds what breaks first, does not measure server capacity
+`prod-ready` at 877286b. One Windows laptop with 8 logical CPUs ran everything: MongoDB (single-node replica set),
+uvicorn with 4 workers, and locust (a master and `--worker` processes) on the same CPUs. Data: 1000 seeded shops,
+300 products and 2000 customers each (the seed took 2.3 min; the full `migrations up` afterwards took ~48 min,
+because 0401 read the customers again for every batch).
+- **1x (14 bills/s, ~250 requests/s):** 0 errors. `POST /api/invoices` p50 160 ms, p95 840 ms (over the 500 ms
+  target, on a machine shared with the load generator).
+- **3x:** the laptop saturates at about 300-460 requests/s, as expected for one machine running the load too.
+- What broke under overload, all fixed on `prod-ready` the same day (`docs/PRODUCTION-PLAN.md`, "Load-test fixes"):
+  - requests queued for a MongoDB connection for up to 10 s and came back as 500s with full tracebacks (1272
+    WaitQueueTimeoutError, 133 ExecutionTimeout, a few NetworkTimeout and ServerSelectionTimeout);
+    `POST /api/invoices` p95 reached 34 s and MongoDB aborted transactions left idle for over 60 s. MongoDB's own
+    time per bill transaction was a median 6-7 ms; the rest was waiting on the saturated API. Now: 503 `busy` /
+    `db_busy` at once (`backend/overload.py`), retried by the app.
+  - with `LOG_FORMAT` unset in `ENV=dev`, each traceback went through rich with local variables (~8,600 lines,
+    ~10 s of CPU): all 4 workers stayed at 100% CPU for 10+ minutes after the load stopped and `/readyz` timed
+    out. The JSON logging of staging and production degraded gracefully (0.6% errors, recovered by itself). Now no
+    log path prints local variables.
+  - migration 0401 read the customers again for every batch (2 million customers); now one pass.
+  - CPU per search keystroke: an extra query for products without keys, the ranking and FastAPI's
+    jsonable_encoder (about 8%); all three are cut.
+- Not a capacity number: the API, MongoDB and the load generator shared 8 logical CPUs, and Windows runs locust
+  without `--processes`. Capacity is measured on staging-sized hardware with k6 from a separate machine (section 2).
 
 ## Local smoke run (2 Nov 2026, laptop, one uvicorn process, before WP-1 to WP-4)
 60 shops, `PEAK=2 PACE=6 DURATION=45 THINK=0.2`, locust: 1.84 bills/s, ~34 requests/s, no errors,
