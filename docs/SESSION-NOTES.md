@@ -1,7 +1,25 @@
-# Hara Hisaab: where we are (session notes, 18 Oct 2026, end of day)
+# Hara Hisaab: where we are (session notes, updated 4 Nov 2026)
 
 Hand-over notes so the next session can pick up without the old chat. No secrets here: keys and
-passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters them.
+passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters them. The standing rules and
+branch map are also in `CLAUDE.md` at the repo root.
+
+## Start here (4 Nov 2026)
+- **Branch:** work on `prod-ready` (pushed to GitHub on 4 Nov). It contains `staging` and everything after it.
+- **Deployed:** QA runs `staging` as last pushed (before the testers' round); production runs the old `main`
+  (19ca6f3). The testers' round and all production work exist only on GitHub branches, not on any server.
+- **Built:** the QA app is 1.1.0 (versionCode 2). The code is 1.2.0 (versionCode 3, new native modules), so the
+  next QA step is a 1.2.0 build, not an OTA, and only after the owner's browser go.
+- **Waiting on the owner:**
+  1. How to browser-test the testers' round: locally, or push `staging` to QA (a push deploys the QA backend).
+  2. Bill correction: keep it owner-only (as built)?
+  3. Decisions D1–D17 in `docs/PRODUCTION-PLAN.md` (domain, Atlas, compute, AI budget, OTP provider, retention,
+     pricing, iOS timing and the rest).
+- **Next work after those answers:** capacity test with k6 from a separate machine against staging-sized hardware
+  (`loadtest/README.md`); optionally let `POST /api/invoices` past the in-flight limit by a small margin so bills
+  keep going while searches are shed; then iOS (`docs/ROADMAP.md`).
+- **Cloud sessions:** no SSH to the VM and no local MongoDB; run MongoDB in Docker as `CLAUDE.md` describes. The
+  launch configs and the local load-test helpers below lived on the owner's Windows PC.
 
 ## The project in one paragraph
 **Hara Hisaab (हरा हिसाब)**, formerly NurseryPOS, is a multi-tenant point-of-sale app for plant nurseries.
