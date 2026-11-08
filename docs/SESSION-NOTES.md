@@ -16,6 +16,12 @@ branch map are also in `CLAUDE.md` at the repo root.
   default through the date check; fixed in d655670). The rehearsal then passed: old 1.1.0 login, old bill and
   stock intact, new bills continue the number series, retry key replays, Home totals right, MongoDB a replica set.
   Those two fixes were pushed to `prod-ready` and `staging` for the second QA deploy.
+- **Second QA deploy (3187206):** stopped at its first step, before any change: the running web container's image
+  was gone from Docker's image list ("No such image"). Reproduced with real Docker: with the containerd image store
+  a prune removes an untagged image while its container keeps running, and `docker commit` then fails too.
+  deploy.sh now keeps a rollback image when it can (tag, else commit); when it cannot, staging deploys without an
+  automatic rollback and says so in the log ("WARNING: no rollback image"), production stops before any change
+  (7159a08, 7613128; tests in test_ops.py). The third QA deploy carries these.
 - **Deploy rehearsal, for next time:** a bare clone of the repo as `origin`, its `staging` branch plus a
   smoke-only commit that sets `PIP_CERT` to the sandbox proxy's CA (the image build cannot reach PyPI otherwise;
   the VM needs nothing), a clone of it as `$HOME/Plant_Tech-staging` with a `deploy/.env` (PROJECT_NAME, a free
