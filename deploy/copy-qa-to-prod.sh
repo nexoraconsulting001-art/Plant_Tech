@@ -41,7 +41,7 @@ counts() {  # counts <qa|prod> <db>: "collection count" lines, sorted
   "$1" exec -T mongo mongosh --quiet --eval "
     const d = db.getSiblingDB('$2');
     d.getCollectionNames().filter(c => !c.startsWith('system.')).sort()
-      .forEach(c => print(c + ' ' + d.getCollection(c).countDocuments({})));"
+      .forEach(c => print(c + ' ' + d.getCollection(c).countDocuments({})));" < /dev/null
 }
 ready() {  # ready <port>: /readyz answers 200 within 90 s
   for _ in $(seq 1 45); do
@@ -79,7 +79,7 @@ if [ "$QA_PREFIX" = "$PROD_PREFIX" ] && [ "$(env_get "$QA_DIR" R2_BUCKET)" = "$(
 fi
 pgrep -f demo-refresh.sh >/dev/null 2>&1 && die "the demo shop refresh is running right now; wait a few minutes"
 for side in qa prod; do
-  "$side" exec -T mongo mongosh --quiet --eval 'db.hello().isWritablePrimary || quit(1)' >/dev/null \
+  "$side" exec -T mongo mongosh --quiet --eval 'db.hello().isWritablePrimary || quit(1)' >/dev/null < /dev/null \
     || die "$side's database is not up (cd into its deploy folder and run: docker compose ps)"
 done
 ready "$QA_PORT" || die "QA does not answer on 127.0.0.1:$QA_PORT/readyz"
@@ -92,7 +92,7 @@ echo "  Production's database is REPLACED by QA's (a backup of both is made firs
 echo "  QA and production are paused for a few minutes; QA keeps its data and starts again afterwards."
 echo
 if [ "$YES" != 1 ]; then
-  read -r -p "Type COPY to go ahead: " answer
+  read -r -p "Type COPY to go ahead: " answer || answer=""
   [ "$answer" = COPY ] || die "nothing was changed"
 fi
 
@@ -121,8 +121,8 @@ trap finish EXIT
 
 say "pausing QA and production (web, worker)"
 QA_PAUSED=1
-qa stop web worker >/dev/null
-prod stop web worker >/dev/null
+qa stop web worker >/dev/null < /dev/null
+prod stop web worker >/dev/null < /dev/null
 
 # ---- 3. backups ------------------------------------------------------------------------------------
 say "backing up QA's database"
@@ -137,7 +137,7 @@ counts qa "$QA_DB" > "$OUT/qa-counts.txt"
 # ---- 4. production's database = QA's ------------------------------------------------------------------
 say "replacing production's database with QA's"
 PROD_CHANGED=1
-prod exec -T mongo mongosh --quiet --eval "db.getSiblingDB('$PROD_DB').dropDatabase()" >/dev/null
+prod exec -T mongo mongosh --quiet --eval "db.getSiblingDB('$PROD_DB').dropDatabase()" >/dev/null < /dev/null
 prod exec -T mongo mongorestore --archive --gzip --nsInclude "$QA_DB.*" --nsFrom "$QA_DB.*" --nsTo "$PROD_DB.*" \
   --quiet < "$OUT/qa.archive.gz"
 
@@ -150,16 +150,16 @@ for n in STORAGE_BACKEND STORAGE_PREFIX R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET
 done
 export SRC_STORAGE_PREFIX="$QA_PREFIX"
 say "copying photos from $QA_PREFIX/ to $PROD_PREFIX/"
-prod run --rm --no-deps -T "${src_vars[@]}" migrate python -m env_copy photos
+prod run --rm --no-deps -T "${src_vars[@]}" migrate python -m env_copy photos < /dev/null
 say "pointing the copied records at production's photos"
-prod run --rm --no-deps -T "${src_vars[@]}" migrate python -m env_copy rewrite
+prod run --rm --no-deps -T "${src_vars[@]}" migrate python -m env_copy rewrite < /dev/null
 
 # ---- 6. notifications -------------------------------------------------------------------------------
-prod run --rm --no-deps -T migrate python -m env_copy clear-push
+prod run --rm --no-deps -T migrate python -m env_copy clear-push < /dev/null
 
 # ---- 7. compare ------------------------------------------------------------------------------------
 say "comparing record counts"
-prod run --rm --no-deps -T migrate python -m migrations up
+prod run --rm --no-deps -T migrate python -m migrations up < /dev/null
 counts prod "$PROD_DB" > "$OUT/prod-counts.txt"
 if diff <(grep -v '^push_tokens ' "$OUT/qa-counts.txt") <(grep -v '^push_tokens ' "$OUT/prod-counts.txt"); then
   echo "  every collection has the same number of records on both sides ($(wc -l < "$OUT/qa-counts.txt") collections)"
@@ -169,7 +169,7 @@ fi
 
 # ---- 8. production on ------------------------------------------------------------------------------
 say "starting production"
-prod start web worker >/dev/null
+prod start web worker >/dev/null < /dev/null
 ready "$PROD_PORT" || die "production does not answer on 127.0.0.1:$PROD_PORT/readyz after the copy"
 PROD_OK=1
 say "done: production now has QA's data (backups and counts in $OUT)"
