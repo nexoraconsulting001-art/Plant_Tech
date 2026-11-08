@@ -105,15 +105,15 @@ PROD_OK=0
 finish() {
   if [ "$QA_PAUSED" = 1 ]; then
     say "starting QA again"
-    qa start web worker >/dev/null 2>&1 || echo "WARNING: QA did not start again: cd $QA_DIR/deploy && docker compose start web worker" >&2
+    qa up -d --no-build --no-deps web worker >/dev/null 2>&1 || echo "WARNING: QA did not start again: cd $QA_DIR/deploy && docker compose up -d --no-build --no-deps web worker" >&2
   fi
   if [ "$QA_PAUSED" = 1 ] && [ "$PROD_CHANGED" = 0 ]; then
     say "production was not changed; starting it again"
-    prod start web worker >/dev/null 2>&1 || true
+    prod up -d --no-build --no-deps web worker >/dev/null 2>&1 || true
   elif [ "$PROD_OK" != 1 ]; then
     echo >&2
     echo "Production is left paused. Its data before this run is in $OUT/prod-before.archive.gz; to put it back:" >&2
-    echo "  cd $PROD_DIR/deploy && docker compose exec -T mongo mongorestore --archive --gzip --drop < $OUT/prod-before.archive.gz && docker compose start web worker" >&2
+    echo "  cd $PROD_DIR/deploy && docker compose exec -T mongo mongorestore --archive --gzip --drop < $OUT/prod-before.archive.gz && docker compose up -d --no-build --no-deps web worker" >&2
   fi
 }
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
@@ -171,7 +171,7 @@ fi
 
 # ---- 8. production on ------------------------------------------------------------------------------
 say "starting production"
-prod start web worker >/dev/null < /dev/null
+prod up -d --no-build --no-deps web worker >/dev/null < /dev/null
 ready "$PROD_PORT" || die "production does not answer on 127.0.0.1:$PROD_PORT/readyz after the copy"
 PROD_OK=1
 say "done: production now has QA's data (backups and counts in $OUT)"

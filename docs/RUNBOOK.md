@@ -187,7 +187,7 @@ docker compose stop web worker                     # nothing writes while restor
 # copy the chosen .age file and the private key to the VM for this step only, then:
 age -d -i /tmp/restore.agekey backups/<file>.age | docker compose exec -T mongo mongorestore --archive --gzip --oplogReplay --drop
 shred -u /tmp/restore.agekey
-docker compose start web worker && curl -s 127.0.0.1:8120/readyz
+docker compose up -d --no-build --no-deps web worker && curl -s 127.0.0.1:8120/readyz   # `start` fails: no migrate container
 ```
 Check: log in as a test shop, open today's bills and the dashboard. Then write down what was lost (from the last
 backup's time to the restore) and tell the affected shops.
