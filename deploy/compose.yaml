@@ -11,6 +11,8 @@
 #   worker   arq: queued jobs and the scheduled ones (daily summary). Exactly one.
 #   redis    job queue and shared rate limits. Append-only file on, never evicts keys, no published port.
 # ENV defaults to staging here; production's deploy/.env sets ENV=production (and the checks that come with it).
+# Process limits go in deploy.resources.limits.pids only: Docker Compose refuses a project that also sets
+# pids_limit ("can't set distinct values on 'pids_limit' and 'deploy.resources.limits.pids'").
 name: ${PROJECT_NAME:-nurserypos}
 
 x-api: &api
@@ -49,8 +51,7 @@ services:
       retries: 10
     init: true
     stop_grace_period: 30s
-    pids_limit: 512
-    deploy: { resources: { limits: { memory: 1g } } }
+    deploy: { resources: { limits: { memory: 1g, pids: 512 } } }
     logging: *logging
 
   redis:
@@ -65,8 +66,7 @@ services:
       retries: 5
     init: true
     stop_grace_period: 30s
-    pids_limit: 128
-    deploy: { resources: { limits: { cpus: "0.5", memory: 192m } } }
+    deploy: { resources: { limits: { cpus: "0.5", memory: 192m, pids: 128 } } }
     logging: *logging
 
   # A volume made by the old image (which ran as root) belongs to root; the image now runs as uid 10001.
@@ -105,8 +105,7 @@ services:
       start_period: 20s
       retries: 3
     stop_grace_period: 30s
-    pids_limit: 512
-    deploy: { resources: { limits: { cpus: "2", memory: 1g } } }
+    deploy: { resources: { limits: { cpus: "2", memory: 1g, pids: 512 } } }
 
   worker:
     <<: *api
@@ -122,8 +121,7 @@ services:
       start_period: 30s
       retries: 3
     stop_grace_period: 30s
-    pids_limit: 256
-    deploy: { replicas: 1, resources: { limits: { cpus: "1", memory: 512m } } }
+    deploy: { replicas: 1, resources: { limits: { cpus: "1", memory: 512m, pids: 256 } } }
 
 volumes:
   data: {}
