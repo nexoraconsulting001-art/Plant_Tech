@@ -7,6 +7,14 @@ FROM python:3.12.14-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 
+# Debian's security updates on top of the base image. The publisher rebuilds the base image only now and then, so
+# fixed OS packages (perl, openssl, apt, pcre2 on 8 Nov 2026) stayed vulnerable and CI's Trivy scan failed. This
+# layer is cached until the base image changes: Dependabot proposes base-image bumps weekly, and CI's weekly scan
+# (built without cache) fails when new fixes are out.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # every package pinned with hashes (requirements.lock, made from requirements.txt)
 COPY requirements.lock .
 RUN pip install --require-hashes --no-deps -r requirements.lock

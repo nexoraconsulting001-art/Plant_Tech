@@ -31,6 +31,10 @@ branch map are also in `CLAUDE.md` at the repo root.
   public /readyz 200 (mongo ok, storage ok). From outside: 65 routes, POST /api/purchases takes Idempotency-Key,
   /api/config min_app_version 1.1.0 (the QA phones keep working). The demo refresh cron works again (it reads
   compose.yaml, which is valid now).
+- **Trivy (8 Nov):** CI's image scan failed since 4 Nov on Debian packages of the base image with fixes out (perl,
+  openssl, apt, pcre2; every Python package was clean). The Dockerfile now installs Debian's security updates
+  after FROM (checked locally: all six packages at the fixed versions). On `prod-ready` only; QA gets it with the
+  next `staging` push.
 - **Deploy rehearsal, for next time:** a bare clone of the repo as `origin`, its `staging` branch plus a
   smoke-only commit that sets `PIP_CERT` to the sandbox proxy's CA (the image build cannot reach PyPI otherwise;
   the VM needs nothing), a clone of it as `$HOME/Plant_Tech-staging` with a `deploy/.env` (PROJECT_NAME, a free
