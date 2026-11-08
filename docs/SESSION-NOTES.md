@@ -5,6 +5,10 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
 branch map are also in `CLAUDE.md` at the repo root.
 
 ## Start here (8 Nov 2026)
+- **Evening, 8 Nov: production release planned (owner approved).** Production gets this version, QA's data is
+  copied into it exactly (pilot shops and the demo shop; "copy demo shop too"), the pilots move to the production
+  app, builds come from `main`; sslip.io for now. The plan and the owner's steps: `docs/PROD-RELEASE.md`. Waiting
+  for the owner's setup (A) and "release". Section "Production release tools" below.
 - **Afternoon, 8 Nov:** plant detection made consistent and tied to the shop's stock, an "App build" button in
   GitHub Actions, a fix for reloaded web screens, and a full local browser test (sections "Plant detection",
   "Browser test before the QA build", "App build button", "Firebase file for notifications" below). Pushed to
@@ -169,6 +173,29 @@ be pulled or at least shown in recommended". Claude Sonnet 5.5 takes no `tempera
   from cache, at Sonnet 5.5's $2 / $0.20 per million).
 - **Not done yet:** a consistency eval (20-30 of the owner's plant photos, 3 runs each, before and after). It needs
   the photos.
+
+## Production release tools (8 Nov 2026, evening)
+The owner: "no production currently, no users on it, all users are on QA ... make prod up and running and publish
+builds from it; all the data on QA needs to be made on prod as it is". Answers: sslip.io for now, copy the demo
+shop too, the move evening when the setup is done. Built and rehearsed (nothing live changed):
+- `deploy/copy-qa-to-prod.sh` + `backend/env_copy.py`: the copy (RUNBOOK, "Copy QA into production"). Photo paths
+  are stored whole with the folder (`<STORAGE_PREFIX>/shops/...`), so the photos are copied to production's folder
+  (server-side inside R2 when both use the same keys) and every stored text under QA's folder is re-pointed
+  (uploads, products, businesses, library...). Phones registered for notifications are QA-app ones: removed.
+  Server addresses are not stored (bill links are made when shared), so nothing else changes.
+- `deploy/prod-env-from-qa.sh`: production's `deploy/.env` from QA's (test: the result passes production's settings
+  check). `deploy.sh`: `ALLOW_NO_ROLLBACK=1` for production's first deploy (QA's upgrade hit "no rollback image").
+- `storage_client` / `env_copy`: `R2_ENDPOINT_URL` (another S3 address) for rehearsals only.
+- Rehearsals with real Docker (two stacks, moto as S3, a demo shop and a pilot shop with a really uploaded photo):
+  the copy twice (re-runnable, photos skipped), refusals change nothing; the old production version (19ca6f3,
+  identical deploy files to QA's old one) upgraded on production settings (settings check, 22 migrations, rollups,
+  `/readyz` with storage); then the dress rehearsal in the real order. Found and fixed: (1) docker compose exec
+  read the piped "COPY" answer; (2) `docker compose start web worker` fails on stacks deploy.sh made ("missing
+  dependency migrate"): now `up -d --no-build --no-deps` (RUNBOOK's restore had the same line); (3) the version
+  check compares the backend tree, not the commit; (4) migration 0303 stopped on a product row without an id.
+- Production app builds: GitHub `production` environment (approval, `EXPO_TOKEN`), EAS production variables
+  `EXPO_PUBLIC_BACKEND_URL` and `ALLOW_IP_BACKEND_URL=1` (sslip.io by decision), Branch `main` in "App build".
+- Checks: backend 465 passed, 2 skipped (+ the newest deploy test on its own), ruff clean.
 
 ## Browser test before the QA build (8 Nov 2026)
 Against a local server with exactly this code (backend/tests/devserver.py on a real MongoDB replica set via

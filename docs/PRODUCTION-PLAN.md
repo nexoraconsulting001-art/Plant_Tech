@@ -683,3 +683,13 @@ A code review of everything production would get (`main...prod-ready`) found 11 
 - Checks: backend 456 passed, 2 skipped, ruff clean; app tsc, eslint 0 errors, i18n 854 texts, Node 19/19.
 - Owner steps before notifications work on the QA app: google-services.json (received, all three apps) into EAS,
   FCM V1 key in Expo credentials, PUSH_ENABLED=1 on staging.
+
+## Status update (8 Nov 2026, evening): production release planned
+- Owner: production has no users; make it run this version, copy QA's data into it exactly (pilot shops and the
+  demo shop), move the pilots to the production app and build apps from `main`. D1 stays sslip.io for now. D15
+  (wipe) is covered: production's old data is backed up and replaced by the copy.
+- Plan and owner steps: `docs/PROD-RELEASE.md`. Tools: `deploy/prod-env-from-qa.sh`, `deploy/copy-qa-to-prod.sh`
+  (+ `backend/env_copy.py`), `ALLOW_NO_ROLLBACK` in deploy.sh. All rehearsed with real Docker; four problems found
+  and fixed on the way (SESSION-NOTES, "Production release tools").
+- Waiting for the owner: production settings on the VM, GitHub production environment (reviewer, EXPO_TOKEN), EAS
+  production variables, then "release".

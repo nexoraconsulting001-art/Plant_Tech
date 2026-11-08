@@ -100,6 +100,15 @@ docker compose run --rm --no-deps migrate python -m manage_users admin list
   An update reaches only phones whose app version matches `frontend/app.json` (the 1.1.0 QA build never gets 1.2.x
   code).
 
+### Copy QA into production (one time, the pilots' move)
+`deploy/copy-qa-to-prod.sh` (run on the VM from production's checkout, after QA and production run the same server
+code): pauses both, backs up both databases to `~/.nurserypos/copies/<time>/`, replaces production's database with
+QA's, copies QA's R2 photos into production's folder and re-points the copied records (`backend/env_copy.py`),
+removes QA-app phones from notifications, compares every collection's record count, and starts both again (QA also
+after a failure). It refuses: different server code, a wrong `ENV` on either side, a shared photo folder, a
+database other than the VM's own, a running demo refresh. Production's settings for its first deploy come from
+QA's with `deploy/prod-env-from-qa.sh`. The whole plan, with the owner's steps: `docs/PROD-RELEASE.md`.
+
 ---
 
 ## 2. Rollback

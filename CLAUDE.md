@@ -11,7 +11,8 @@ line ~544); `docs/ROADMAP.md` is the order of work (open issues, then iOS, then 
   `.github/workflows/deploy.yml`. Push it only when the owner asks; bringing `prod-ready` into `staging` is an
   owner decision.
 - `main`: production (old single-shop version, 19ca6f3). Pushing it deploys production. **Do not touch** until the
-  owner explicitly asks for the production release.
+  owner explicitly asks for the production release. The release is planned (owner, 8 Nov): `docs/PROD-RELEASE.md`;
+  it waits for the owner's setup and their word "release". After it, `main` = `staging` = `prod-ready`.
 - GitHub's default branch is `main`, so a new session must check out `prod-ready`.
 - Remote: `github.com/nexoraconsulting001-art/Plant_Tech`. The old `udyanojha/Nzone` remote is never pushed to.
 
@@ -40,7 +41,7 @@ has no SSH access to the VM.
   `docker run -d --name mongo -p 127.0.0.1:27017:27017 mongo:7.0 --replSet rs0 --bind_ip_all`, then
   `rs.initiate({_id: 'rs0', members: [{_id: 0, host: '127.0.0.1:27017'}]})` in mongosh, then
   `pip install --require-hashes --no-deps -r requirements-dev.lock`, `ruff check .` and
-  `MONGO_URL='mongodb://127.0.0.1:27017/?replicaSet=rs0' python -m pytest -q` (440 tests on 3 Nov 2026).
+  `MONGO_URL='mongodb://127.0.0.1:27017/?replicaSet=rs0' python -m pytest -q` (465 tests on 8 Nov 2026).
 - **App** (`frontend/`): `npx tsc --noEmit`, `npx eslint app src` (0 errors), `npm run i18n:check`, and
   `node --test --experimental-transform-types tests/sync-policy.test.mjs tests/cart-sync.test.mjs scripts/test-paging.mjs`.
   The package manager is yarn 1 (`npx yarn@1.22.22 add …`).
