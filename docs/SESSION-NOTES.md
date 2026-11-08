@@ -1,25 +1,42 @@
-# Hara Hisaab: where we are (session notes, updated 4 Nov 2026)
+# Hara Hisaab: where we are (session notes, updated 8 Nov 2026)
 
 Hand-over notes so the next session can pick up without the old chat. No secrets here: keys and
 passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters them. The standing rules and
 branch map are also in `CLAUDE.md` at the repo root.
 
-## Start here (4 Nov 2026)
-- **Branch:** work on `prod-ready` (pushed to GitHub on 4 Nov). It contains `staging` and everything after it.
+## Start here (8 Nov 2026)
+- **Branch:** work on `prod-ready`. On 8 Nov the code review's fixes were committed there (776f980, see
+  "Code review fixes" below). **Not on GitHub yet:** the cloud session's push was refused (403, the Claude GitHub
+  App is not installed for Plant_Tech). Once the owner installs it (or pushes from their PC): push `prod-ready`,
+  then fast-forward `staging` to it (`git push origin prod-ready:staging`; `staging` is an ancestor) to deploy QA.
+  The owner asked for that QA update on 8 Nov ("get the app back to QA updated with all fixes").
 - **Deployed:** QA runs `staging` as last pushed (before the testers' round); production runs the old `main`
-  (19ca6f3). The testers' round and all production work exist only on GitHub branches, not on any server.
+  (19ca6f3). Checked for the QA deploy: the VM's old deploy.sh syncs and runs the new one; MongoDB keeps its
+  volume and becomes a one-member replica set; the demo shop keeps its daily refresh (migration 1002); the
+  settings check needs `JWT_SECRET` of 32+ characters in the VM's `deploy/.env` (else the deploy stops with
+  nothing swapped).
 - **Built:** the QA app is 1.1.0 (versionCode 2). The code is 1.2.0 (versionCode 3, new native modules), so the
   next QA step is a 1.2.0 build, not an OTA, and only after the owner's browser go.
-- **Waiting on the owner:**
-  1. How to browser-test the testers' round: locally, or push `staging` to QA (a push deploys the QA backend).
-  2. Bill correction: keep it owner-only (as built)?
-  3. Decisions D1–D17 in `docs/PRODUCTION-PLAN.md` (domain, Atlas, compute, AI budget, OTP provider, retention,
-     pricing, iOS timing and the rest).
-- **Next work after those answers:** capacity test with k6 from a separate machine against staging-sized hardware
-  (`loadtest/README.md`); optionally let `POST /api/invoices` past the in-flight limit by a small margin so bills
-  keep going while searches are shed; then iOS (`docs/ROADMAP.md`).
-- **Cloud sessions:** no SSH to the VM and no local MongoDB; run MongoDB in Docker as `CLAUDE.md` describes. The
-  launch configs and the local load-test helpers below lived on the owner's Windows PC.
+- **Owner answers (8 Nov):**
+  1. Fix the review findings and update QA: yes (done, waiting for the push).
+  2. D1 domain: keep the sslip.io addresses for now (users never see the address). A production build then needs
+     `ALLOW_IP_BACKEND_URL=1` in the EAS "production" environment (app.config.js refuses IP-like addresses
+     without it). When a domain comes: `APP_BACKEND_URL` per GitHub Environment (eas-update.yml) and
+     `EXPO_PUBLIC_BACKEND_URL` in EAS.
+  3. D15 production data wipe: approved, "no issues". The owner runs it at the production release
+     (QA-CHECKLIST R.2); Claude never deletes data.
+  4. A high-level design (HLD) explainer was made for the owner (an artifact, not in the repo).
+- **Still open:** bill correction owner-only (as built)?; Google Play developer account (personal or company; a
+  personal one made after Nov 2023 needs a closed test with 12+ testers for 14 days before production, check
+  Google's current rule); the other decisions D2-D14, D16, D17 in `docs/PRODUCTION-PLAN.md`.
+- **Next:** push and QA deploy, then the owner's browser test on QA (the owner's own browser app, localhost:8083,
+  pointed at staging; Claude never types logins there), then the owner's go for the 1.2.0 QA build. Then the two
+  overload changes (bills past the in-flight limit by a margin; a slow query answered apart from a pool wait),
+  the k6 capacity test plan, and iOS preparation.
+- **Cloud sessions:** no SSH to the VM. Set up as on 8 Nov: start `dockerd`, run `mongo:7.0` as replica set rs0
+  (CLAUDE.md), a Python **3.12** venv with `pip install --require-hashes --no-deps -r requirements-dev.lock` (3.13
+  is not what CI and the image use), and `npx yarn@1.22.22 install --frozen-lockfile` in `frontend/`. pytest's
+  `-q` is already in pytest.ini: run `pytest -o addopts="" -q` to see the summary line.
 
 ## The project in one paragraph
 **Hara Hisaab (हरा हिसाब)**, formerly NurseryPOS, is a multi-tenant point-of-sale app for plant nurseries.
@@ -89,6 +106,32 @@ bills can be corrected for 7 days; decimals by product unit, never for plants.
 - 163318b review fixes; app is now 1.2.0 (versionCode 3).
 - Checked in the local browser on 2 Nov: 40 pcs typed, below-stock warnings and "Bill anyway", two UPI IDs and the QR picker, WhatsApp auto-open, Correct bill (INV-0424 → INV-0425), give-back amount, Notifications screen.
 - Not checked yet: a phone (push needs Firebase + a 1.2.0 build), the employee view in the browser, Hindi on the new screens.
+
+## Code review fixes (8 Nov 2026, `prod-ready` 776f980)
+A code review of everything production would get (`main...prod-ready`, 97 commits, ~31k lines of code) found 11
+issues; 10 are fixed with tests, one is left by the owner's D1 answer.
+- **Supplier bills never add stock twice:** POST /api/purchases takes an `Idempotency-Key` like bills (shared
+  helpers in `backend/idempotency.py`, which bills use too); the same key answers with the saved supplier bill, a
+  changed one is refused (409 `idempotency_mismatch`, `params.purchase_id`). The supplier-bill screen sends one key
+  per bill and says when a try may or may not have been saved. 1.1.0 sends no key: unchanged.
+- **Catalogue look-ups** for a supplier bill's new items run 8 at a time, once per name.
+- **Job queue fails fast when Redis is down** (`backend/jobs.py`): one connection try with a 1 s limit, 3 s per
+  enqueue, then 30 s of immediate `QueueDown`. Before, arq's pool tried 5 times a second apart, so a bill that
+  crossed a low-stock line waited 5-10 s while Redis was down. A name look-up that cannot be queued no longer
+  fails the product save.
+- **Deploys find their image:** with `IMAGE_SOURCE=ghcr`, deploy.sh pulls `tree-<hash of backend/>` (then the
+  commit tag); deploy.yml tags both. Before, a docs-only or app-only commit after a backend push made the
+  production deploy fail. The swap now starts web and worker only (`--no-deps`), so migrate and data-owner no
+  longer run twice per deploy.
+- **CSV exports** escape typed names a spreadsheet would run as a formula (`common.csv_text`; invoices.csv,
+  GSTR-1 names and HSN descriptions).
+- **Smaller:** PATCH /customers answers 409 (not 500) when another phone took the number a moment before; PUT
+  /business answers 404 for an erased shop; erasing a shop also removes its `storage_usage` row and notification
+  markers (`storage_client.delete_many`).
+- **Left as it is (owner, D1):** eas-update.yml falls back to the sslip.io address for the production channel;
+  revisit with the domain.
+- **Checks on 8 Nov:** backend 449 passed, 2 skipped (11 new tests; ruff clean; shellcheck clean on deploy.sh);
+  app tsc clean, eslint 0 errors, i18n 850 texts, Node tests 18/18. Not checked in a browser or on a phone yet.
 
 ## Production readiness and scale (Nov 2026, local branch `prod-ready`, not pushed)
 Owner's ask: production-ready with standard tools, sized for 1000 nurseries x 200 bills a day (peak ~14 bills/s,

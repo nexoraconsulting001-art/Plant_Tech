@@ -541,7 +541,7 @@ Acceptance:
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | **Domain and Cloudflare account** | Buy a domain (for example harahisaab.in) and use Cloudflare Free with `api.`, `img.` and `bill.` hostnames. Do it **before the next production build**, so no IP address is ever baked into a released binary (`frontend/eas.json:17,29,40,50`). |
+| D1 | **Domain and Cloudflare account** | Buy a domain (for example harahisaab.in) and use Cloudflare Free with `api.`, `img.` and `bill.` hostnames. Do it **before the next production build**, so no IP address is ever baked into a released binary (`frontend/eas.json:17,29,40,50`). **Owner, 8 Nov: keep the sslip.io addresses for now** (users never see the address); a production build then needs `ALLOW_IP_BACKEND_URL=1` in the EAS production environment. |
 | D2 | **Database: MongoDB Atlas or self-hosted** | Atlas in Mumbai (AWS ap-south-1). Start on M10 (about $60–90 a month) with Continuous Cloud Backup, then move to M30 at about 100–150 shops. Self-hosting needs 3 VMs plus Percona Backup for MongoDB and on-call expertise. |
 | D3 | **Paid compute vendor** | Oracle pay-as-you-go Ampere A1 in Mumbai or Hyderabad (about $55 a month for 4 OCPU / 24 GB) for a **dedicated** production VM. Keep staging on the shared Always Free VM. Move to AWS (Graviton next to Atlas) only if cross-cloud latency or egress shows up in measurements. |
 | D4 | **AI budget and plan allowances** | Separate Anthropic workspaces for production and staging, each with a hard spend limit (pilot about $300 a month; full scale about $3k a month), usage alerts and auto-reload. Allowances per plan in TIERS-PLAN: trial about 20 scans a day, paid tiers monthly. Ask Anthropic for a higher usage tier before onboarding beyond 200 shops. |
@@ -555,7 +555,7 @@ Acceptance:
 | D12 | **Employee price and discount rights** | Add a "change price or discount" permission, off by default for employees, with a maximum discount %. Price overrides show in the employees report and the audit log. |
 | D13 | **Service targets and on-call** | Aim for 99.9% monthly uptime and p95 bill save under 500 ms. Name who gets paged (SMS through Better Stack or UptimeRobot) and publish a status page. Decide the support hours shops will be told. |
 | D14 | **Account security** | Turn on 2FA for GitHub, Expo, Cloudflare, Anthropic, Oracle, Atlas, Google Play and Apple. Protect `main` and `staging` branches. You are the required reviewer for production deploys. |
-| D15 | **Production data wipe and migration to multi-shop** | Schedule it before the first paying shop (QA-CHECKLIST R.2). Make sure admin access no longer depends on a phone number (WP-8) before the wipe. |
+| D15 | **Production data wipe and migration to multi-shop** | Schedule it before the first paying shop (QA-CHECKLIST R.2). Make sure admin access no longer depends on a phone number (WP-8) before the wipe. **Owner, 8 Nov: approved, "no issues"**; the owner runs the wipe at the production release (Claude never deletes data). |
 | D16 | **Pricing compared with cost** | At full scale the optimised all-in cost is about $2.3k–4.2k a month, about ₹2–4 per shop per day. Set tier prices and AI allowances so the Tree tier covers its AI usage. As-is, AI alone (~$7.7k) would exceed the revenue projected in TIERS-PLAN (~₹4.2 lakh, about $4.7k). |
 | D17 | **iOS timing** | Apple Developer Program ($99 a year), after Android is stable. The WP-13 iOS settings are needed before the first TestFlight build. |
 
@@ -637,3 +637,23 @@ Load-test fixes (3 Nov 2026), after a local locust run with 1000 seeded shops (`
   - The in-flight limit refuses bills and searches alike. Letting `POST /api/invoices` past the limit by a small margin would keep billing going while searches are shed; not done.
 - Still to do: run the load test again on staging-sized hardware with k6 from a separate machine (WP-1), with the new 503 rate per route watched in `/metrics`.
 - Checks after these fixes and their review: the backend suite on the local replica set has 440 tests (438 pass; 2 skipped, because they need `RUN_BENCH=1` or a real Redis), including `tests/test_ops.py` under Git Bash, and ruff is clean. The app checks pass: `tsc`, eslint with 0 errors, `i18n:check` (846 texts, 0 missing) and the Node unit tests (18).
+
+## Status update (8 Nov 2026)
+
+A code review of everything production would get (`main...prod-ready`) found 11 issues; 10 are fixed on
+`prod-ready` (776f980) with regression tests, one is left by the owner's D1 answer. Details in
+`docs/SESSION-NOTES.md`, "Code review fixes". What changes in the table above:
+- WP-1 Sale integrity: supplier bills (POST /api/purchases) now take an Idempotency-Key too (`backend/idempotency.py`,
+  shared with bills), so a retried supplier bill no longer adds its stock twice; its catalogue look-ups run in
+  parallel.
+- WP-5 Worker and notifications: queueing a job fails fast while Redis is down (one 1 s connection try, 3 s per
+  enqueue, then 30 s of immediate failure), so bills that cross a low-stock line are not held up by it.
+- WP-10 Compliance data: CSV exports escape typed text that a spreadsheet would run as a formula.
+- WP-11 CI/CD: GHCR images are also tagged by the tree hash of `backend/`, and deploy.sh pulls by it, so a
+  docs-only commit no longer breaks a production deploy; the swap starts web and worker only.
+- Owner decisions: D1 (sslip.io for now) and D15 (production wipe approved) are answered; the rest stay open.
+- Not deployed yet: the push to GitHub was refused from the cloud session (the Claude GitHub App is not installed
+  for Plant_Tech). The owner asked for QA to be updated with all fixes; that is the next step once access works.
+- Checks: backend 449 passed, 2 skipped (11 new), ruff clean; app tsc, eslint 0 errors, i18n 850 texts, Node 18/18.
+- Still open from 3 Nov: bills past the in-flight limit by a small margin, a pool wait answered apart from a slow
+  query, and the k6 capacity test on staging-sized hardware.
