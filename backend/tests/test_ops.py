@@ -145,7 +145,9 @@ case "$1" in
     case "$2" in
       inspect) id=$(resolve "${@: -1}"); [ -n "$id" ] || exit 1; case "$*" in *'{{.Id}}'*) echo "$id" ;; esac ;;
     esac ;;
-  pull) [ "${PULL_RC:-0}" = 0 ] || exit 1; echo sha256:new > "$T/$(key "${@: -1}")" ;;
+  pull) [ "${PULL_RC:-0}" = 0 ] || exit 1
+        case " ${PULL_MISSING:-} " in *" ${@: -1} "*) exit 1 ;; esac  # tags the registry does not have
+        echo sha256:new > "$T/$(key "${@: -1}")" ;;
 esac
 exit 0
 """
@@ -157,8 +159,14 @@ case " $HEALTHY " in *" $running "*) printf 200 ;; *) printf 503 ;; esac
 """
 
 FAKE_GIT = r"""#!/usr/bin/env bash
-case "$*" in *rev-parse*) echo 1111111111111111111111111111111111111111 ;; *log*) echo "1111111 new version" ;; esac
+case "$*" in
+  *HEAD:backend*) echo 2222222222222222222222222222222222222222 ;;  # the tree hash of backend/
+  *rev-parse*) echo 1111111111111111111111111111111111111111 ;;
+  *log*) echo "1111111 new version" ;;
+esac
 """
+SWAP = "docker compose up -d --no-build --no-deps --remove-orphans web worker"
+GHCR = "ghcr.io/acme/hara-hisaab-api"
 
 
 @pytest.fixture
@@ -200,8 +208,9 @@ def test_deploy_migrates_before_the_swap_and_keeps_the_new_version(vm):
     assert r.returncode == 0, r.stdout + r.stderr
     assert running == "sha256:new"
     migrate = calls.index("docker compose run --rm --no-TTY migrate")
-    swap = calls.index("docker compose up -d --no-build --remove-orphans")
+    swap = calls.index(SWAP)  # web and worker only: migrate and data-owner do not run a second time
     assert calls.index("docker compose build web") < migrate < swap
+    assert not any(c.startswith("docker compose up") and "--no-deps" not in c and "mongo" not in c for c in calls)
     assert "docker tag sha256:old hh-api:rollback" in calls  # what ran before is kept for a rollback
     assert "docker tag hh-api:latest hh-api:1111111111111111111111111111111111111111" in calls
     assert (vm.state / "good").read_text().strip() == "1111111111111111111111111111111111111111"
@@ -221,7 +230,7 @@ def test_failed_migrations_never_swap(vm):
     r, calls, running = vm("staging", MIGRATE_RC="1")
     assert r.returncode == 1
     assert running == "sha256:old"
-    assert not any(c.startswith("docker compose up -d --no-build --remove-orphans") for c in calls)
+    assert SWAP not in calls
     assert (vm.tags / "hh-api_latest").read_text().strip() == "sha256:old"  # a restart starts the old image too
     assert "FAILED: migrations" in (vm.state / "deploy.log").read_text()
 
@@ -232,15 +241,39 @@ def test_bad_settings_stop_before_the_migrations(vm):
     assert "docker compose run --rm --no-TTY migrate" not in calls
 
 
-def test_prebuilt_image_from_ghcr(vm, tmp_path):
+def _ghcr(tmp_path):
     env_file = tmp_path / "checkout" / "deploy" / ".env"
-    env_file.write_text(env_file.read_text() + "IMAGE_SOURCE=ghcr\nGHCR_IMAGE=ghcr.io/acme/hara-hisaab-api\n",
-                        newline="\n")
+    env_file.write_text(env_file.read_text() + f"IMAGE_SOURCE=ghcr\nGHCR_IMAGE={GHCR}\n", newline="\n")
+
+
+def test_prebuilt_image_from_ghcr(vm, tmp_path):
+    """Found by the tree hash of backend/ (what it was built from), so a newer docs-only commit still finds it."""
+    _ghcr(tmp_path)
     r, calls, running = vm("staging")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "docker pull --quiet ghcr.io/acme/hara-hisaab-api:1111111111111111111111111111111111111111" in calls
+    assert f"docker pull --quiet {GHCR}:tree-2222222222222222222222222222222222222222" in calls
+    assert f"docker pull --quiet {GHCR}:1111111111111111111111111111111111111111" not in calls
     assert "docker compose build web" not in calls
     assert running == "sha256:new"
+
+
+def test_ghcr_image_by_commit_when_it_has_no_tree_tag(vm, tmp_path):
+    """Images built before the tree tags existed are found by their commit."""
+    _ghcr(tmp_path)
+    r, calls, running = vm("staging", PULL_MISSING=f"{GHCR}:tree-2222222222222222222222222222222222222222")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"docker pull --quiet {GHCR}:1111111111111111111111111111111111111111" in calls
+    assert running == "sha256:new"
+
+
+def test_no_ghcr_image_yet_changes_nothing(vm, tmp_path):
+    _ghcr(tmp_path)
+    r, calls, running = vm("staging", PULL_MISSING=f"{GHCR}:tree-2222222222222222222222222222222222222222 "
+                                                   f"{GHCR}:1111111111111111111111111111111111111111")
+    assert r.returncode == 1 and running == "sha256:old"
+    assert SWAP not in calls and "docker compose run --rm --no-TTY migrate" not in calls
+    assert "no image for 1111111111111111111111111111111111111111" in (vm.state / "deploy.log").read_text()
+    assert (vm.tags / "hh-api_latest").read_text().strip() == "sha256:old"
 
 
 def test_manual_rollback(vm):
@@ -262,7 +295,7 @@ def test_bills_of_a_version_without_rollups_are_rebuilt_after_the_swap(vm):
     today = datetime.now(IST).date().isoformat()
     assert _rebuilds(calls) == [f"docker compose run --rm --no-TTY --no-deps migrate python rollups.py rebuild "
                                 f"--touched-since {today}"]
-    assert calls.index("docker compose up -d --no-build --remove-orphans") < calls.index(_rebuilds(calls)[0])
+    assert calls.index(SWAP) < calls.index(_rebuilds(calls)[0])
     assert not (vm.state / "rollups-stale-since").exists()
     before = len(calls)
     r, calls, _ = vm("staging")  # now the running version keeps them itself (the call log goes on)

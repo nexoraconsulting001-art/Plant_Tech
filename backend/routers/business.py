@@ -241,6 +241,8 @@ async def get_business(user: dict = Depends(auth.current_user)):
 async def update_business(body: BusinessIn, owner: dict = Depends(auth.require("owner"))):
     db = get_db()
     current = await get_business(owner)
+    if current is None:  # the shop was erased (a login can stay cached for USER_CACHE_SECONDS after that)
+        raise HTTPException(404, "Shop not found.")
     data = body.model_dump(exclude_none=True, exclude={"upi_ids", "default_upi"})
     update = {k: v.strip() if isinstance(v, str) else v for k, v in data.items()}
     if body.upi_ids is not None:  # the list wins over a single upi_id
@@ -250,7 +252,6 @@ async def update_business(body: BusinessIn, owner: dict = Depends(auth.require("
         update.update(_upi_single(update["upi_id"], current))
     elif body.default_upi is not None:
         update.update(upi_fields(current["upi_ids"], body.default_upi))
-    current = current or {}
     _check_tax_profile(update, current)
     await _check_logo(db, owner["business_id"], update, current)
     if update.get("onboarding_done") and not (update.get("name") or current.get("name")):

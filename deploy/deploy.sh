@@ -177,8 +177,18 @@ failed() {
 # 2. The image
 if [ "$IMAGE_SOURCE" = ghcr ]; then
   [ -n "$GHCR_IMAGE" ] || failed "IMAGE_SOURCE=ghcr needs GHCR_IMAGE in deploy/.env"
-  docker pull --quiet "$GHCR_IMAGE:$SHA" || failed "could not pull $GHCR_IMAGE:$SHA (did the image job finish?)"
-  docker tag "$GHCR_IMAGE:$SHA" "$IMAGE:latest" || failed "docker tag"
+  # GitHub Actions tags each image with its commit and with the tree hash of backend/ (what the image is built
+  # from). The branch's newest commit may have no image of its own (it changed only docs or the app, so no deploy
+  # run built one), but the backend tree it carries was built: find the image by the tree, then by the commit.
+  TREE=$(git rev-parse "HEAD:backend")
+  if docker pull --quiet "$GHCR_IMAGE:tree-$TREE" >/dev/null 2>&1; then
+    PULLED="$GHCR_IMAGE:tree-$TREE"
+  elif docker pull --quiet "$GHCR_IMAGE:$SHA" >/dev/null 2>&1; then
+    PULLED="$GHCR_IMAGE:$SHA"
+  else
+    failed "no image for $SHA (backend tree $TREE) in $GHCR_IMAGE: a newer commit still being built is deployed by its own run"
+  fi
+  docker tag "$PULLED" "$IMAGE:latest" || failed "docker tag"
 else
   docker compose build web || failed "image build"
 fi
@@ -191,9 +201,10 @@ if docker compose config --services | grep -qx migrate; then
   docker compose run --rm --no-TTY migrate || failed "migrations"
 fi
 
-# 4. Swap and wait
+# 4. Swap and wait. Web and worker only (--no-deps): MongoDB and Redis are up and the migrations ran in step 3, and
+#    a plain `up` would start the one-off migrate and data-owner services again, after the old version stopped.
 SWAPPED=1
-docker compose up -d --no-build --remove-orphans || failed "docker compose up"
+docker compose up -d --no-build --no-deps --remove-orphans web worker || failed "docker compose up"
 NEW=$(docker image inspect -f '{{.Id}}' "$IMAGE:latest")
 if wait_ready && [ "$(running_image)" = "$NEW" ]; then
   log "$TARGET: healthy on 127.0.0.1:$PORT with $SHA"

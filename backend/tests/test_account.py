@@ -60,6 +60,10 @@ def test_after_the_grace_period_gst_records_are_archived_and_the_rest_erased(cli
     db = get_db()
     run(db.summary_schedule.update_one({"_id": bid}, {"$set": {"due": datetime.now(timezone.utc), "day": "x"}},
                                        upsert=True))  # WP-5's row, keyed by the shop id
+    other_bid = other.get("/api/auth/me").json()["business"]["id"]
+    for shop_id in (bid, other_bid):  # "already sent" markers, keyed by the shop id with no business_id field
+        run(db.push_marks.insert_one({"_id": f"stock:{shop_id}:p1:2026-11-08", "state": "sent"}))
+    assert run(db.storage_usage.find_one({"_id": bid}))["files"] == 2  # the photo and the logo
     assert _delete(client, shop.h, password="secret123").status_code == 200
     assert run(account.erase_due(db)) == []  # still in the grace period
     later = datetime.now(timezone.utc) + timedelta(days=account.GRACE_DAYS, minutes=1)
@@ -70,6 +74,9 @@ def test_after_the_grace_period_gst_records_are_archived_and_the_rest_erased(cli
     assert not storage_client._local_path(photo).exists()
     assert not any(f.exists() for f in public)
     assert run(db.summary_schedule.find_one({"_id": bid})) is None
+    assert run(db.storage_usage.find_one({"_id": bid})) is None
+    assert run(db.push_marks.count_documents({"_id": {"$regex": f"^stock:{bid}:"}})) == 0
+    assert run(db.push_marks.count_documents({"_id": {"$regex": f"^stock:{other_bid}:"}})) == 1  # not other shops'
     assert run(db.daily_sales.count_documents({"business_id": bid})) == 0  # WP-2's rollups
     archived = run(db.gst_archive.find({"business_id": bid}, {"_id": 0}).to_list(100))
     kinds = sorted({a["kind"] for a in archived})

@@ -35,6 +35,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 import gst
+from common import csv_text
 from errors import render
 from units import unit_of
 
@@ -383,7 +384,7 @@ def gstr1_csv(m: Month) -> dict[str, str]:
     for bill in m.bills:
         for rate, t in sorted(bill.rates.items()):
             if bill.ctin:
-                rows["b2b"].append([bill.ctin, bill.name, bill.number, _csv_date(bill.day), num(bill.value),
+                rows["b2b"].append([bill.ctin, csv_text(bill.name), bill.number, _csv_date(bill.day), num(bill.value),
                                     _pos_name(bill.pos), "N", "", "Regular B2B", "", rate_num(rate), num(t.txval), 0])
             elif _is_b2cl(bill):
                 rows["b2cl"].append([bill.number, _csv_date(bill.day), num(bill.value), _pos_name(bill.pos), "",
@@ -400,7 +401,7 @@ def gstr1_csv(m: Month) -> dict[str, str]:
     for kind in ("b2b", "b2c"):
         for r in _hsn_rows(m, kind):
             val = r["txval"] + r["iamt"] + r["camt"] + r["samt"] + r["csamt"]
-            rows[f"hsn_{kind}"].append([r["hsn_sc"], r["desc"], _uqc_name(r["uqc"]), r["qty"], round(val, 2), r["rt"],
+            rows[f"hsn_{kind}"].append([r["hsn_sc"], csv_text(r["desc"]), _uqc_name(r["uqc"]), r["qty"], round(val, 2), r["rt"],
                                         r["txval"], r["iamt"], r["camt"], r["samt"], r["csamt"]])
     for _, doc in sorted(m.docs.items()):
         rows["docs"].append(["Invoices for outward supply", doc["first"], doc["last"], doc["total"], doc["cancel"]])

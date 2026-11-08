@@ -306,3 +306,37 @@ def test_customer_search_examines_at_most_twice_the_results(client):
                         (live, [("last_purchase_at", -1)])):
         examined, returned = run(explain(query, sort, 51))
         assert returned == 51 and examined <= 2 * returned, (query, examined, returned)
+
+
+def test_two_phones_giving_customers_the_same_number_at_once_get_409_not_500(client, monkeypatch):
+    """Review fix: the check for a clash and the write are two calls. When another phone takes the number between
+    them, the unique {business_id, phone} index refuses the write: that is the usual 409, not a 500."""
+    shop = Shop(client)
+    a = shop.post("/api/customers", {"name": "Anita", "phone": "9811100001"}).json()
+    shop.post("/api/customers", {"name": "Bina", "phone": "9811100002"})
+    real = customers.get_db
+
+    class Late:  # the clash check runs before the other phone's write lands: it finds nothing
+        def __init__(self, coll):
+            self._coll = coll
+
+        def __getattr__(self, name):
+            return getattr(self._coll, name)
+
+        async def find_one(self, q, *args, **kwargs):
+            if isinstance(q.get("id"), dict):
+                return None
+            return await self._coll.find_one(q, *args, **kwargs)
+
+    class Db:
+        def __init__(self, db):
+            self._db = db
+
+        def __getattr__(self, name):
+            return Late(self._db.customers) if name == "customers" else getattr(self._db, name)
+
+    monkeypatch.setattr(customers, "get_db", lambda: Db(real()))
+    r = client.patch(f"/api/customers/{a['id']}", headers=shop.h, json={"phone": "9811100002"})
+    assert r.status_code == 409 and r.json()["detail"] == "A customer with this phone number already exists."
+    monkeypatch.setattr(customers, "get_db", real)
+    assert shop.get(f"/api/customers/{a['id']}").json()["phone"] == "+919811100001"

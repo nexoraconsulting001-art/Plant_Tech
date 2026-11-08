@@ -250,7 +250,10 @@ async def entry_for_new_product(db, name: str, category: str | None, business_id
         existing = await db.library.find_one({"name_key": key, "removed": False}, {"_id": 0, "id": 1})
         return existing["id"] if existing else None
     if get_settings().ai_enrich_names:
-        await jobs.enqueue("look_up_names", entry["id"], _job_id=f"look_up_names:{entry['id']}")
+        try:
+            await jobs.enqueue("look_up_names", entry["id"], _job_id=f"look_up_names:{entry['id']}")
+        except Exception:  # the job queue is down: the product is saved anyway; enrich_library.py fills the names in
+            logger.warning("could not queue the name look-up for %s", entry["name"], exc_info=True)
     return entry["id"]
 
 

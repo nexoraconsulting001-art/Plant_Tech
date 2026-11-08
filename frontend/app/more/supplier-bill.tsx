@@ -2,15 +2,20 @@
 // read from all pages together → review them and the supplier → stock is added. Items that match a
 // product add to its stock; the rest become new products. Pages from different suppliers or different
 // bills are refused, so one scan is always one bill.
-import { useState } from "react";
+// Never added twice: every try of "Add to stock" on this screen sends the same Idempotency-Key, and the server
+// answers a key it has seen with the supplier bill it already saved. After no answer (or a busy server that may
+// have saved it) the screen stays and the worker taps again; if the bill was changed meanwhile and the first try
+// had been saved after all, the server says so (idempotency_mismatch) and the screen closes.
+import { useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import * as Crypto from "expo-crypto";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, apiPost, uploadImage } from "@/src/api";
+import { ApiError, apiPost, noReply, serverBusy, uploadImage } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { choose, notice } from "@/src/confirm";
 import { SupplierChoice, SupplierPicker } from "@/src/components/supplier-picker";
@@ -41,6 +46,7 @@ export default function SupplierBill() {
   const [number, setNumber] = useState("");
   const [date, setDate] = useState("");
   const [items, setItems] = useState<Item[] | null>(null);
+  const saveKey = useRef<string | null>(null); // this supplier bill's Idempotency-Key, kept until it is saved
 
   const BILL = { hint: t("Drag the corners to fit the bill") };
   const uploading = pages.some((p) => p.state === "uploading");
@@ -110,21 +116,32 @@ export default function SupplierBill() {
   const valid = (items ?? []).filter((i) => i.name.trim() && Number(i.quantity) > 0);
   const total = valid.reduce((s, i) => s + Number(i.quantity) * (Number(i.purchase_price) || 0), 0);
 
+  function saved() {
+    qc.invalidateQueries({ queryKey: ["products"] });
+    qc.invalidateQueries({ queryKey: ["suppliers"] });
+    router.back();
+  }
+
   async function save() {
     setSaving(true);
+    if (!saveKey.current) saveKey.current = Crypto.randomUUID();
     try {
       await apiPost("/purchases", {
         supplier: supplier.name.trim(), supplier_id: supplier.id, supplier_phone: supplier.phone, supplier_address: supplier.address,
         supplier_gstin: supplier.gstin, invoice_number: number, date, total,
         image_paths: pages.filter((p) => p.path).map((p) => p.path),
         items: valid.map((i) => ({ product_id: i.product_id, name: i.name.trim(), quantity: Number(i.quantity), purchase_price: Number(i.purchase_price) || 0 })),
-      });
-      qc.invalidateQueries({ queryKey: ["products"] });
-      qc.invalidateQueries({ queryKey: ["suppliers"] });
+      }, { headers: { "Idempotency-Key": saveKey.current } });
       toast.show(t("Stock added for {{items}}", { items: plural(valid.length, "1 item", "{{n}} items") }), "success");
-      router.back();
+      saved();
     } catch (e: any) {
-      toast.show(e.message, "error");
+      if (e instanceof ApiError && e.code === "idempotency_mismatch") {
+        await notice(t("Already saved"), e.message); // an earlier try was saved: its stock is in, these changes are not
+        saved();
+      } else if (noReply(e) || (serverBusy(e) && (e.code !== "busy" || e.maybeDone))) {
+        await notice(noReply(e) ? t("No answer from the server") : t("The server is busy"),
+          t("The stock may or may not have been added. Tap Add to stock again: it will not be added twice."));
+      } else toast.show(e.message, "error");
     } finally {
       setSaving(false);
     }

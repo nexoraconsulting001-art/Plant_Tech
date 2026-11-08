@@ -45,8 +45,12 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Image name (GHCR needs lower case)
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hara-hisaab-api" >> "$GITHUB_ENV"
+      - name: Image name (GHCR needs lower case) and the backend tree it is built from
+        # deploy/deploy.sh finds the image by tree-<hash of backend/>: a later commit that changed only docs or the
+        # app gets no deploy run and no image of its own, but carries the same backend tree.
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hara-hisaab-api" >> "$GITHUB_ENV"
+          echo "TREE=$(git rev-parse HEAD:backend)" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
         with:
           platforms: arm64
@@ -61,7 +65,9 @@ jobs:
           context: backend
           platforms: linux/arm64
           push: true
-          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:tree-${{ env.TREE }}
           build-args: GIT_SHA=${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

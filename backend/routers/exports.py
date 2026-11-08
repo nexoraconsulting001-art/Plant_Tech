@@ -41,7 +41,7 @@ import gstr
 import jobs
 import ratelimit
 import storage_client
-from common import IST, new_id
+from common import IST, csv_text, new_id
 from db import get_db
 from errors import AppError
 
@@ -63,6 +63,7 @@ PARTS = [
 ]
 BILL_COLUMNS = ("invoice_number", "date_key", "created_at", "status", "customer_name", "customer_phone",
                 "payment_method", "subtotal", "discount", "gst_total", "grand_total")
+TEXT_COLUMNS = {"customer_name"}  # typed by a person: escaped for spreadsheets (common.csv_text); the rest the server makes
 
 
 def _minutes(name: str, default: int) -> int:
@@ -263,7 +264,7 @@ async def _write_bills_csv(db, zf: zipfile.ZipFile, bid: str):
         buf.seek(0), buf.truncate()
         async for inv in db.invoices.find({"business_id": bid}, {"_id": 0, **{c: 1 for c in BILL_COLUMNS}}).sort(
                 "created_at", 1).batch_size(1000):
-            w.writerow([inv.get(c, "") for c in BILL_COLUMNS])
+            w.writerow([csv_text(inv.get(c, "")) if c in TEXT_COLUMNS else inv.get(c, "") for c in BILL_COLUMNS])
             if buf.tell() > 256_000:
                 await asyncio.to_thread(out.write, buf.getvalue().encode())
                 buf.seek(0), buf.truncate()

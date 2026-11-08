@@ -5,14 +5,24 @@ photos of all its pages.
 
 The stock, the new products, the stock history and the purchase are written in one transaction
 (db.in_transaction): a bill whose third item fails adds nothing. The supplier record and the shared catalogue
-entries for new names are found or made first, outside it (both are find-or-make, so a retry reuses them).
+entries for new names are found or made first, outside it (both are find-or-make, so a retry reuses them); the
+catalogue look-ups run a few at a time, once per name.
+
+Retries: the app may send an `Idempotency-Key` header with POST /purchases (idempotency.py). The same key again
+answers with the supplier bill it saved (header `Idempotent-Replayed: true`) instead of adding the stock a second
+time; the same key with changed items is refused (409 idempotency_mismatch, naming the bill that was saved). Without
+the header (app 1.1.0) nothing changes.
 """
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 import auth
 import catalog_search
+import idempotency
 from common import new_id, now_iso
 from db import get_db, in_transaction
 from errors import AppError
@@ -24,6 +34,8 @@ from stock import history_row, notify_after, settle_stock, write_history
 router = APIRouter(prefix="/api/purchases", tags=["purchases"])
 MAX_PAGES = 5
 MAX_ITEMS = 200
+LOOKUPS_AT_ONCE = 8  # catalogue look-ups for new item names run side by side, this many at a time
+ROUTE = "purchase"  # the kind of request an Idempotency-Key was used for (idempotency.previous)
 
 
 class PurchaseItem(BaseModel):
@@ -55,10 +67,43 @@ def shown(p: dict) -> dict:
     return {**{k: v for k, v in p.items() if k != "image_path"}, "image_paths": paths}
 
 
+async def _replayed(db, user: dict, key: str | None, fp: str, response: Response) -> dict | None:
+    """The supplier bill an earlier request with this key saved, or None (a new key, or no key)."""
+    k = await idempotency.previous(db, user, key, ROUTE)
+    if not k:
+        return None
+    doc = await db.purchases.find_one({"business_id": user["business_id"], "id": k["purchase_id"]}, {"_id": 0})
+    if not doc:
+        raise idempotency.conflict()
+    if idempotency.changed(k, fp):
+        raise AppError(409, "This supplier bill was already saved before your last changes. Those changes are not "
+                            "in it.", "idempotency_mismatch", purchase_id=doc["id"])
+    response.headers["Idempotent-Replayed"] = "true"
+    return shown(doc)
+
+
+async def _library_ids(db, items: list[PurchaseItem], business_id: str) -> list[str | None]:
+    """The shared catalogue entry of each new item (None for items already in the shop), found or made once per
+    name and LOOKUPS_AT_ONCE at a time: one at a time, a long bill spent seconds here before its transaction."""
+    gate = asyncio.Semaphore(LOOKUPS_AT_ONCE)
+    names = list(dict.fromkeys(it.name for it in items if not it.product_id))
+
+    async def one(name: str) -> str | None:
+        async with gate:
+            return await library.entry_for_new_product(db, name, None, business_id)
+
+    found = dict(zip(names, await asyncio.gather(*(one(n) for n in names))))
+    return [None if it.product_id else found[it.name] for it in items]
+
+
 @router.post("")
-async def create_purchase(body: PurchaseIn, user: dict = Depends(auth.require("stock"))):
+async def create_purchase(body: PurchaseIn, response: Response, user: dict = Depends(auth.require("stock")),
+                          idempotency_key: str | None = idempotency.IdempotencyKey):
     db = get_db()
     bid = user["business_id"]
+    fp = idempotency.fingerprint(body)
+    if done := await _replayed(db, user, idempotency_key, fp, response):
+        return done
     owner = auth.can(user, "owner")
     paths = list(dict.fromkeys([*body.image_paths, *([body.image_path] if body.image_path else [])]))[:MAX_PAGES]
     for path in paths:
@@ -76,8 +121,7 @@ async def create_purchase(body: PurchaseIn, user: dict = Depends(auth.require("s
 
     shop = await db.businesses.find_one({"id": bid}, {"_id": 0, "profit_percent": 1}) or {}
     markup = 1 + shop.get("profit_percent", DEFAULT_PROFIT_PERCENT) / 100
-    library_ids = [None if it.product_id else await library.entry_for_new_product(db, it.name, None, bid)
-                   for it in body.items]
+    library_ids = await _library_ids(db, body.items, bid)
     entries = await catalog_search.library_images(db, [{"library_id": lid} for lid in library_ids])  # for search keys
     reason = f"Supplier bill {body.invoice_number}"
     purchase_id = new_id()
@@ -116,7 +160,13 @@ async def create_purchase(body: PurchaseIn, user: dict = Depends(auth.require("s
         doc.pop("_id", None)
         return doc, changes
 
-    doc, changes = await in_transaction(add, db)
+    try:
+        doc, changes = await in_transaction(
+            idempotency.keyed(db, user, idempotency_key, ROUTE, purchase_id, fp, add, id_field="purchase_id"), db)
+    except DuplicateKeyError as e:  # the same key at the same moment: the first one's supplier bill
+        if idempotency.is_key_clash(e) and (done := await _replayed(db, user, idempotency_key, fp, response)):
+            return done
+        raise
     await notify_after(db, bid, changes)
     return shown(doc)
 

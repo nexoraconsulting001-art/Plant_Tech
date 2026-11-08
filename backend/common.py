@@ -65,6 +65,18 @@ class Throttle:
             self._seen.pop(key, None)
 
 
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_text(value):
+    """Typed text (a customer's or item's name) for a CSV cell: a spreadsheet would run a cell starting with = + - @
+    as a formula (e.g. =HYPERLINK sending the next cells away), so such text gets a leading ' (OWASP CSV
+    injection). Anything that is not a string is returned as it is."""
+    if isinstance(value, str) and value.startswith(FORMULA_START):
+        return "'" + value
+    return value
+
+
 def name_key(name: str) -> str:
     """Case/spacing-insensitive key for matching product names ('Money  plant' == 'money plant')."""
     return re.sub(r"[^a-z0-9ऀ-ॿ]+", " ", (name or "").lower()).strip()

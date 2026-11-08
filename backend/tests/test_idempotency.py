@@ -7,7 +7,7 @@ from fastapi import Response
 
 import db as db_module
 from conftest import MOCK, Shop, run
-from routers import sales
+from routers import purchases, sales
 
 needs_rs = pytest.mark.skipif(MOCK, reason="needs the MongoDB replica set (transactions)")
 
@@ -186,3 +186,83 @@ def test_the_same_key_with_a_changed_order_is_refused_and_names_the_bill(client)
     # A key saved before fingerprints (no fingerprint) replays as before.
     run(db_module.state.db.idempotency_keys.update_one({"key": key}, {"$unset": {"fingerprint": ""}}))
     assert _bill(shop, [_line(rose, 1), _line(pot, 1)], key=key).json()["id"] == first["id"]
+
+
+# ---- supplier bills (POST /purchases): the same key never adds the stock twice (review fix)
+
+def _supplier_bill(shop, items, key=None, **extra):
+    headers = {**shop.h, **({"Idempotency-Key": key} if key else {})}
+    return shop.c.post("/api/purchases", headers=headers,
+                       json={"supplier": "Green Farms", "invoice_number": "GF-1", "items": items, **extra})
+
+
+def _stock(shop, p):
+    return shop.get(f"/api/products/{p['id']}").json()["stock"]
+
+
+def test_a_supplier_bill_sent_twice_adds_its_stock_once(client):
+    """The worker taps Save, the answer is lost on a slow network, and they tap Save again with the same key."""
+    shop = Shop(client)
+    rose = shop.product("Rose", 100, 10)
+    items = [{"product_id": rose["id"], "name": "Rose", "quantity": 5, "purchase_price": 60},
+             {"name": "Areca Palm", "quantity": 2, "purchase_price": 100}]
+    key = str(uuid.uuid4())
+    first = _supplier_bill(shop, items, key)
+    again = _supplier_bill(shop, items, key)
+    assert first.status_code == again.status_code == 200, again.text
+    assert again.json() == first.json() and again.headers["idempotent-replayed"] == "true"
+    assert "idempotent-replayed" not in first.headers
+    assert _count("purchases") == 1 and _stock(shop, rose) == 15
+    assert [p["name"] for p in shop.get("/api/products").json()].count("Areca Palm") == 1
+    # Changed items with the same key: refused, naming the supplier bill that was saved.
+    r = _supplier_bill(shop, [{**items[0], "quantity": 6}], key)
+    assert r.status_code == 409 and r.json()["code"] == "idempotency_mismatch", r.text
+    assert r.json()["params"] == {"purchase_id": first.json()["id"]}
+    # A new key is a new supplier bill; no key at all (app 1.1.0) works as it always did.
+    assert _supplier_bill(shop, items, str(uuid.uuid4())).status_code == 200
+    assert _supplier_bill(shop, items).status_code == 200
+    assert _count("purchases") == 3 and _stock(shop, rose) == 25
+
+
+def test_a_refused_supplier_bill_does_not_use_up_its_key(client):
+    shop = Shop(client)
+    rose = shop.product("Rose", 100, 10)
+    key = str(uuid.uuid4())
+    gone = [{"product_id": "no-such-product", "name": "Lily", "quantity": 1, "purchase_price": 10}]
+    r = _supplier_bill(shop, gone, key)
+    assert r.status_code == 400 and r.json()["code"] == "product_missing"
+    r = _supplier_bill(shop, [{"product_id": rose["id"], "name": "Rose", "quantity": 1, "purchase_price": 60}], key)
+    assert r.status_code == 200, r.text
+    assert _count("purchases") == 1 and _stock(shop, rose) == 11
+
+
+def test_a_bill_key_is_not_a_supplier_bill_key(client):
+    shop = Shop(client)
+    key = str(uuid.uuid4())
+    seeds = [{"product_id": None, "name": "Seeds", "quantity": 1, "price": 20}]
+    assert _bill(shop, seeds, key=key).status_code == 200
+    r = _supplier_bill(shop, [{"name": "Areca Palm", "quantity": 1, "purchase_price": 100}], key)
+    assert r.status_code == 409 and r.json()["code"] == "idempotency_conflict"
+    assert _count("purchases") == 0
+
+
+@needs_rs
+def test_the_same_supplier_bill_at_the_same_moment(client):
+    shop = Shop(client)
+    rose = shop.product("Rose", 100, 10)
+    owner = _owner(shop)
+    body = purchases.PurchaseIn(supplier="Green Farms", items=[
+        purchases.PurchaseItem(product_id=rose["id"], name="Rose", quantity=3, purchase_price=60),
+        purchases.PurchaseItem(name="Areca Palm", quantity=1, purchase_price=100)])
+    key = str(uuid.uuid4())
+
+    async def send():
+        return await asyncio.gather(*[purchases.create_purchase(body=body, response=Response(), user=owner,
+                                                                idempotency_key=key) for _ in range(6)],
+                                    return_exceptions=True)
+
+    results = run(send())
+    assert all(isinstance(r, dict) for r in results), results
+    assert len({r["id"] for r in results}) == 1
+    assert _count("purchases") == 1 and _stock(shop, rose) == 13
+    assert [p["name"] for p in shop.get("/api/products").json()].count("Areca Palm") == 1

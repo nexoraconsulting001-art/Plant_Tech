@@ -176,6 +176,22 @@ def delete_object(path: str, store: str = PRIVATE):
     _local_path(path, store).unlink(missing_ok=True)
 
 
+def delete_many(keys: list[str], store: str = PRIVATE):
+    """Remove these objects from one store (a shop being erased: its photos and thumbnails). Missing ones are
+    skipped; R2 takes them 1000 per DeleteObjects call."""
+    s3 = init_storage()
+    if s3 is not None:
+        for i in range(0, len(keys), 1000):
+            s3.delete_objects(Bucket=_bucket(store), Delete={"Objects": [{"Key": k} for k in keys[i:i + 1000]],
+                                                             "Quiet": True})
+        return
+    for k in keys:
+        try:
+            _local_path(k, store).unlink(missing_ok=True)  # refuses paths outside the photo folder
+        except (OSError, ValueError):
+            pass
+
+
 def presigned_get(path: str, store: str, seconds: int) -> str:
     """A link anyone can open for `seconds` (R2 only)."""
     return init_storage().generate_presigned_url(

@@ -110,3 +110,14 @@ def test_upi_bill_keeps_the_upi_id_it_was_paid_to(client):
     assert "upi_id" not in _order(shop, plant, payment_method="Cash", upi_id="shop@upi").json()
     shop.c.put("/api/business", headers=shop.h, json={"upi_ids": []})
     assert "upi_id" not in _order(shop, plant, payment_method="UPI").json()
+
+
+def test_shop_settings_of_a_shop_that_is_gone_is_404_not_500(client):
+    """Review fix: a login stays cached for a few seconds after its shop was erased; saving settings then must
+    not crash on the missing shop record."""
+    shop = Shop(client)
+    bid = shop.get("/api/auth/me").json()["business"]["id"]
+    run(db_module.state.db.businesses.delete_one({"id": bid}))
+    for body in ({"default_upi": "x"}, {"upi_id": "shop@okaxis"}, {"name": "New name"}):
+        r = client.put("/api/business", headers=shop.h, json=body)
+        assert r.status_code == 404 and r.json()["detail"] == "Shop not found.", (body, r.text)

@@ -30,8 +30,6 @@ counter moves inside the bill's transaction, so a failed bill takes its number b
 a unique index on {business_id, invoice_number} (migration 0101) makes a duplicate impossible.
 """
 import base64
-import hashlib
-import json
 import os
 import re
 import secrets
@@ -39,7 +37,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -49,6 +47,7 @@ from pymongo.errors import DuplicateKeyError
 import ai_client
 import auth
 import gst
+import idempotency
 import invoice_html
 import rollups
 import storage_client
@@ -93,9 +92,8 @@ class InvoiceIn(BaseModel):
     upi_id: str | None = Field(None, max_length=80)  # UPI only: the shop's UPI ID shown in the QR
 
 
-# Optional header; printable ASCII without spaces, like a UUID. 1.1.0 never sends it.
-IdempotencyKey = Header(None, alias="Idempotency-Key", min_length=8, max_length=100, pattern=r"^[\x21-\x7e]+$")
-KEY_KEEP_DAYS = 7  # how long a key is remembered (TTL index on idempotency_keys.created_at, migration 0103)
+IdempotencyKey = idempotency.IdempotencyKey  # optional header (see idempotency.py); 1.1.0 never sends it
+KEY_KEEP_DAYS = idempotency.KEEP_DAYS  # how long a key is remembered (TTL index on idempotency_keys.created_at, 0103)
 
 
 def price_lines(lines: list[dict], discount: float, *, inter_state: bool = False) -> dict:
@@ -357,36 +355,21 @@ async def _save(db, session, user: dict, body: InvoiceIn, bill: _Bill, short: di
     return invoice
 
 
-# ---- Idempotency-Key (see the module notes)
+# ---- Idempotency-Key (see the module notes and idempotency.py)
 
 def _fingerprint(body: InvoiceIn) -> str:
     """What the bill is: its lines, customer, discount, payment method and GST choice. Not allow_short or upi_id:
     "Bill anyway" resends the same order with allow_short, and that must still find the bill."""
-    seen = body.model_dump(include={"items", "customer_id", "customer_name", "customer_phone", "discount",
-                                    "payment_method", "gst_removed"})
-    return hashlib.sha256(json.dumps(seen, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return idempotency.fingerprint(body, {"items", "customer_id", "customer_name", "customer_phone", "discount",
+                                          "payment_method", "gst_removed"})
 
 
 def _keyed(db, user: dict, key: str | None, route: str, invoice_id: str, fingerprint: str, work):
-    """work(session) behind the Idempotency-Key. The key is the first write of the bill's transaction: a second
+    """work(session) behind the Idempotency-Key, which is the first write of the bill's transaction: a second
     request with the same key while the first is still running write-conflicts on it and is retried, and once the
     first has committed it gets a duplicate key and the first one's bill (_replayed), never out_of_stock or
-    bill_cancelled from what the first one changed. A bill that fails takes its key back with the transaction;
-    on a laptop without transactions the key is removed by hand."""
-    async def run(session):
-        if key:
-            await db.idempotency_keys.insert_one({"business_id": user["business_id"], "key": key, "route": route,
-                                                  "invoice_id": invoice_id, "user_id": user["id"],
-                                                  "fingerprint": fingerprint,
-                                                  "created_at": datetime.now(timezone.utc)}, session=session)
-        try:
-            return await work(session)
-        except BaseException:
-            if key and session is None:
-                await db.idempotency_keys.delete_one({"business_id": user["business_id"], "key": key,
-                                                      "invoice_id": invoice_id})
-            raise
-    return run
+    bill_cancelled from what the first one changed."""
+    return idempotency.keyed(db, user, key, route, invoice_id, fingerprint, work, id_field="invoice_id")
 
 
 async def _replayed(db, user: dict, key: str | None, route: str, response: Response,
@@ -394,17 +377,13 @@ async def _replayed(db, user: dict, key: str | None, route: str, response: Respo
     """The bill an earlier request with this key made, or None (a new key, or no key). The same key with a
     different order (changed after a try that got no answer) is a 409 `idempotency_mismatch` naming the bill that
     was made, so the app can show it instead of taking it for the changed order."""
-    if not key:
-        return None
-    k = await db.idempotency_keys.find_one({"business_id": user["business_id"], "key": key}, {"_id": 0})
+    k = await idempotency.previous(db, user, key, route)
     if not k:
         return None
-    if k["route"] != route:
-        raise AppError(409, "This request was already used for another bill.", "idempotency_conflict")
     inv = await db.invoices.find_one({"business_id": user["business_id"], "id": k["invoice_id"]}, {"_id": 0})
     if not inv:  # the bill was removed since (demo data): the key stays used
-        raise AppError(409, "This request was already used for another bill.", "idempotency_conflict")
-    if fingerprint and k.get("fingerprint") and k["fingerprint"] != fingerprint:  # keys saved before: no fingerprint
+        raise idempotency.conflict()
+    if idempotency.changed(k, fingerprint):
         raise AppError(409, "This order was already billed as {{number}} before your last changes. Those changes "
                             "are not on that bill.", "idempotency_mismatch", number=inv["invoice_number"],
                        invoice_id=inv["id"])
@@ -412,8 +391,7 @@ async def _replayed(db, user: dict, key: str | None, route: str, response: Respo
     return _shown(inv)
 
 
-def _is_key_clash(e: DuplicateKeyError) -> bool:
-    return "key" in ((e.details or {}).get("keyPattern") or {})
+_is_key_clash = idempotency.is_key_clash
 
 
 @router.post("/invoices")

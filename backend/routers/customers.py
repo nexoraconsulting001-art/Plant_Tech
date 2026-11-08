@@ -244,8 +244,11 @@ async def update_customer(customer_id: str, body: CustomerPatch, user: dict = De
         fields["phone"] = phone
     if fields:
         keys = search_fields(fields.get("name", c["name"]), fields.get("phone", c.get("phone")))
-        await db.customers.update_one({"id": customer_id, "business_id": bid},
-                                      {"$set": {**fields, **keys, "updated_at": now_iso()}})
+        try:
+            await db.customers.update_one({"id": customer_id, "business_id": bid},
+                                          {"$set": {**fields, **keys, "updated_at": now_iso()}})
+        except DuplicateKeyError:  # another phone gave a customer this number a moment ago (unique index)
+            raise HTTPException(409, "A customer with this phone number already exists.") from None
         if changed := sorted(k for k in ("name", "phone") if k in fields and fields[k] != c.get(k)):
             # who changed where this customer's bills go (which fields only, no numbers)
             await audit.log(db, user, "customer.update", {"type": "customer", "id": customer_id}, {"fields": changed})

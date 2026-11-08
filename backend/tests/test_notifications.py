@@ -628,3 +628,50 @@ def test_worker_runs_the_summary_and_the_heartbeat(client, monkeypatch):
     monkeypatch.setattr(notify, "send_due_summaries", broken)
     _run(worker.tick(ctx))
     assert len(pings) == 1  # a failed tick does not ping: the monitor alerts
+
+
+# ---- the job queue down: requests are never held up by it (review fix)
+
+class _RedisDown:
+    redis_url = "redis://127.0.0.1:1/0"  # nothing listens there
+
+
+def test_a_queue_that_is_down_fails_fast(monkeypatch):
+    """arq's own pool tries 5 times a second apart: a request queueing a job waited 5-10 s while Redis was down."""
+    monkeypatch.setattr(jobs, "get_settings", lambda: _RedisDown())
+
+    async def scenario():
+        await jobs.close()
+        started = time.monotonic()
+        with pytest.raises(jobs.QueueDown):
+            await jobs.enqueue("deliver_push", [])
+        first = time.monotonic() - started
+        started = time.monotonic()
+        with pytest.raises(jobs.QueueDown):  # not tried again for jobs.DOWN_FOR seconds: no wait at all
+            await jobs.enqueue("deliver_push", [])
+        again = time.monotonic() - started
+        await jobs.close()
+        return first, again
+
+    first, again = asyncio.run(scenario())
+    assert first < 2 and again < 0.05
+
+
+def test_a_bill_is_not_held_up_by_a_queue_that_is_down(client, monkeypatch):
+    """A bill that takes a product below its alert level queues the owner's push: with Redis down the bill still
+    answers at once (the alert is given back and goes with a later change)."""
+    shop = Shop(client)
+    _sign_up(shop)
+    rose = shop.product("Rose", 100, 10, min_stock=5)
+    monkeypatch.setenv("PUSH_ENABLED", "1")
+    monkeypatch.setattr(jobs, "get_settings", lambda: _RedisDown())
+    try:
+        for qty, left in ((6, 4), (4, 0)):  # low, then out: each crossing tries to queue a push
+            started = time.monotonic()
+            r = _order(shop, [{"product_id": rose["id"], "name": "Rose", "quantity": qty, "price": 100}])
+            assert r.status_code == 200, r.text
+            assert time.monotonic() - started < 3
+            assert shop.get(f"/api/products/{rose['id']}").json()["stock"] == left
+        assert _run(db_module.state.db.push_marks.count_documents({})) == 0  # claims given back: tried again later
+    finally:
+        _run(jobs.close())
