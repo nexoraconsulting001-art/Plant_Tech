@@ -203,6 +203,12 @@ production and .qa apps: use the one with all three.
 Android; the full CI runs first; the job runs in the GitHub Environment of the profile and needs the secret
 `EXPO_TOKEN` there (expo.dev > Account settings > Access tokens). It waits for EAS and puts the build page and
 download link in the run summary. Still only after the owner's go for that build.
+- **Not usable yet (found 8 Nov):** GitHub offers "Run workflow" (and the API's dispatch) only for workflows that
+  exist on the repository's default branch, which is `main` (production, not touched). The workflow is on
+  `prod-ready` only, so GitHub does not list it. Fix by the owner: Settings > General > Default branch >
+  `prod-ready` (deploys are unaffected: they follow pushes to `staging` and `main`; Dependabot already targets
+  `staging`; CI's Monday scan then runs on `prod-ready`; CLAUDE.md's branch note changes with it). Or copy the
+  workflow to `main` together with the production release.
 
 ## Code review fixes (8 Nov 2026, `prod-ready` 776f980)
 A code review of everything production would get (`main...prod-ready`, 97 commits, ~31k lines of code) found 11
