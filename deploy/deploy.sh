@@ -220,8 +220,11 @@ else
 fi
 docker tag "$IMAGE:latest" "$IMAGE:$SHA" || failed "docker tag"
 
-# 3. Settings and migrations, while the old version keeps serving
-if docker compose config --services | grep -qx migrate; then
+# 3. Settings and migrations, while the old version keeps serving. The service list is read whole before it is
+#    searched: `... | grep -q` under pipefail fails whenever grep stops reading early and docker gets SIGPIPE, which
+#    skipped this step on QA on 8 Nov.
+SERVICES=$(docker compose config --services) || failed "docker compose config"
+if grep -qx migrate <<<"$SERVICES"; then
   docker compose up -d --no-build mongo redis || failed "database containers"
   docker compose run --rm --no-TTY --no-deps migrate python -m settings || failed "settings check"
   docker compose run --rm --no-TTY migrate || failed "migrations"
