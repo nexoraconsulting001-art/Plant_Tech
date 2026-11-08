@@ -160,7 +160,8 @@ log "$TARGET: deploying $(git log --oneline -1)"
 # running ("No such image" on 8 Nov on QA). Then a copy of the running container is saved instead (docker commit;
 # that needs the image's files too, so it may fail as well). With no rollback image at all, staging goes on
 # without an automatic rollback (a broken QA is fixed by the next push, and this deploy leaves a proper one for
-# next time); production stops here, before any change.
+# next time); production stops here, before any change, unless deploy/.env says ALLOW_NO_ROLLBACK=1 (meant for
+# production's first deploy of this version, while it has no users yet; remove it afterwards).
 PREVIOUS=$(running_image)
 if [ -n "$PREVIOUS" ]; then
   if docker tag "$PREVIOUS" "$IMAGE:rollback" 2>/dev/null; then
@@ -169,11 +170,12 @@ if [ -n "$PREVIOUS" ]; then
     log "$TARGET: the running image $PREVIOUS is no longer listed; saving the running container as $IMAGE:rollback"
     if docker commit "$(running_container)" "$IMAGE:rollback" >/dev/null; then
       PREVIOUS="$IMAGE:rollback"
-    elif [ "$TARGET" = staging ]; then
+    elif [ "$TARGET" = staging ] || [ "$(env_get ALLOW_NO_ROLLBACK)" = 1 ]; then
       log "$TARGET: WARNING: no rollback image could be kept; deploying without an automatic rollback this time"
       PREVIOUS=""
     else
-      log "$TARGET: deploy of $SHA FAILED: could not keep a rollback image; nothing was changed"
+      log "$TARGET: deploy of $SHA FAILED: could not keep a rollback image; nothing was changed" \
+        "(while production has no users: ALLOW_NO_ROLLBACK=1 in deploy/.env, then deploy again)"
       exit 1
     fi
   fi

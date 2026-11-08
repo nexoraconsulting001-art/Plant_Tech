@@ -206,6 +206,7 @@ def vm(tmp_path):
 
     run.state = tmp_path / "state" / "staging"
     run.tags = fake / "tags"
+    run.env_file = checkout / "deploy" / ".env"
     return run
 
 
@@ -363,10 +364,58 @@ def test_no_rollback_image_at_all(vm, tmp_path):
     r, calls, running = vm("prod", MISSING_IDS="sha256:old", COMMIT_RC="1")
     assert r.returncode == 1 and running == "sha256:old"
     assert "docker compose build web" not in calls and SWAP not in calls
-    assert "could not keep a rollback image; nothing was changed" in (vm.state.parent / "prod" / "deploy.log").read_text()
+    log = (vm.state.parent / "prod" / "deploy.log").read_text()
+    assert "could not keep a rollback image; nothing was changed" in log and "ALLOW_NO_ROLLBACK=1" in log
 
     r, calls, running = vm("staging", MISSING_IDS="sha256:old", COMMIT_RC="1")
     assert r.returncode == 0, r.stdout + r.stderr
     assert running == "sha256:new" and SWAP in calls
     log = (vm.state / "deploy.log").read_text()
     assert "WARNING: no rollback image could be kept" in log and len(_rebuilds(calls)) == 1
+
+
+def test_production_without_users_may_deploy_without_a_rollback_image(vm):
+    """The first production deploy of this version (no users yet): ALLOW_NO_ROLLBACK=1 lets it go on like staging."""
+    with vm.env_file.open("a", newline="\n") as f:
+        f.write("ALLOW_NO_ROLLBACK=1\n")
+    r, calls, running = vm("prod", MISSING_IDS="sha256:old", COMMIT_RC="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert running == "sha256:new" and SWAP in calls
+    assert "WARNING: no rollback image could be kept" in (vm.state.parent / "prod" / "deploy.log").read_text()
+
+
+def test_production_settings_are_made_from_qas(tmp_path):
+    """deploy/prod-env-from-qa.sh: QA's keys and limits, production's own name, port, folder, address and login
+    secret, QA-only lines left out, the old file kept; and the result passes production's settings check."""
+    if BASH is None:
+        pytest.skip("needs bash")
+    qa, prod = tmp_path / "qa.env", tmp_path / "prod" / ".env"
+    prod.parent.mkdir()
+    qa.write_text("ENV=staging\nPROJECT_NAME=nurserypos-staging\nHOST_PORT=8130\nSTORAGE_PREFIX=nurserypos-staging\n"
+                  "CORS_ORIGINS=*\nJWT_SECRET=qa-secret-qa-secret-qa-secret-qa-secret\nHEARTBEAT_URL=https://hb/qa\n"
+                  "BACKUP_RCLONE_REMOTE=r2:backups/staging\nANTHROPIC_API_KEY=sk-qa\nSTORAGE_BACKEND=r2\n"
+                  "R2_ACCOUNT_ID=acct\nR2_ACCESS_KEY_ID=key\nR2_SECRET_ACCESS_KEY=secret\nR2_BUCKET=photos\n"
+                  "DB_NAME=nurserypos\nAI_DAILY_LIMIT=300\n", newline="\n")
+    prod.write_text("APP_API_KEY=old\nPROJECT_NAME=nurserypos\n", newline="\n")
+    script = DEPLOY / "prod-env-from-qa.sh"
+    env = {**os.environ, "QA_ENV": str(qa), "PROD_ENV": str(prod)}
+    r = subprocess.run([BASH, str(script)], env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stdout + r.stderr
+    made = dict(line.split("=", 1) for line in prod.read_text().splitlines() if "=" in line and not line.startswith("#"))
+    assert made["ENV"] == "production" and made["PROJECT_NAME"] == "nurserypos" and made["HOST_PORT"] == "8120"
+    assert made["STORAGE_PREFIX"] == "nurserypos" and made["CORS_ORIGINS"] == "" and made["ALLOW_NO_ROLLBACK"] == "1"
+    assert made["PUBLIC_BASE_URL"] == "https://nurserypos.140-238-251-141.sslip.io"
+    assert len(made["JWT_SECRET"]) == 64 and made["JWT_SECRET"] != "qa-secret-qa-secret-qa-secret-qa-secret"
+    assert made["ANTHROPIC_API_KEY"] == "sk-qa" and made["R2_BUCKET"] == "photos" and made["AI_DAILY_LIMIT"] == "300"
+    assert not {"HEARTBEAT_URL", "BACKUP_RCLONE_REMOTE", "APP_API_KEY"} & made.keys()
+    assert "sk-qa" not in r.stdout and made["JWT_SECRET"] not in r.stdout  # no value printed
+    assert [p.name for p in prod.parent.glob(".env.before-*")] and (prod.stat().st_mode & 0o777) == 0o600
+    check = subprocess.run([sys.executable, "-c", "import settings; settings.check()"], cwd=ROOT / "backend", timeout=60,
+                           env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", ""), **made},
+                           capture_output=True, text=True)
+    assert check.returncode == 0, check.stdout + check.stderr
+    again = subprocess.run([BASH, str(script)], env=env, capture_output=True, text=True, timeout=30)
+    assert again.returncode == 1 and "already says ENV=production" in again.stderr
+    qa.write_text(qa.read_text().replace("STORAGE_PREFIX=nurserypos-staging\n", ""), newline="\n")
+    r = subprocess.run([BASH, str(script), "--again"], env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "STORAGE_PREFIX=nurserypos-prod" in prod.read_text()  # QA keeps the default folder

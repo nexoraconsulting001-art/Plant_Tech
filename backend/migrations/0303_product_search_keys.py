@@ -16,7 +16,8 @@ async def _write(db, batch: list[dict]):
 
 async def up(db):
     batch = []
-    async for p in db.products.find({}, FIELDS):
+    # a record without an id is no product the app can open (an old hand-made row): left as it is
+    async for p in db.products.find({"id": {"$exists": True}, "name": {"$type": "string"}}, FIELDS):
         batch.append(p)
         if len(batch) >= BATCH:
             await _write(db, batch)

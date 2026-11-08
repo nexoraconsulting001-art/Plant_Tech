@@ -168,3 +168,17 @@ def test_rewrite_paths_and_clear_push_in_the_database(client):
     assert p1["image_path"] == "nurserypos/shops/s/a.jpg" and p2["image_path"] is None
     assert b1["pages"] == ["nurserypos/shops/s/bill1.jpg"]
     assert again == {} and removed == 2 and left == 0
+
+
+def test_search_keys_migration_leaves_rows_that_are_not_products(client):
+    """Found rehearsing the production upgrade: a hand-made row without an id stopped migration 0303 (KeyError)."""
+    import importlib
+
+    migration = importlib.import_module("migrations.0303_product_search_keys")
+    db = db_module.get_db()
+    run(db.products.insert_many([{"id": "p1", "business_id": "b", "name": "Old Rose", "deleted_at": None},
+                                 {"name": "row without id", "price": 100}, {"id": "p2", "business_id": "b"}]))
+    run(migration.up(db))
+    p1 = run(db.products.find_one({"id": "p1"}))
+    odd = run(db.products.find_one({"name": "row without id"}))
+    assert p1["search_keys"] and "search_keys" not in odd

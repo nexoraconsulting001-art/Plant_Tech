@@ -63,9 +63,11 @@ for d in "$QA_DIR" "$PROD_DIR"; do
   [ -z "$url" ] || [ "$url" = "mongodb://mongo:27017/?replicaSet=rs0" ] \
     || die "$d/deploy/.env sets MONGO_URL to another database; this script copies between the VM's own databases only"
 done
+# The same server code on both sides (the backend folder; a commit that changed only docs deploys nowhere).
 QA_SHA=$(git -C "$QA_DIR" rev-parse HEAD)
-PROD_SHA=$(git -C "$PROD_DIR" rev-parse HEAD)
-[ "$QA_SHA" = "$PROD_SHA" ] || die "QA runs ${QA_SHA:0:7} and production ${PROD_SHA:0:7}: deploy the same version to both first (push staging and main to the same commit)"
+QA_TREE=$(git -C "$QA_DIR" rev-parse HEAD:backend)
+PROD_TREE=$(git -C "$PROD_DIR" rev-parse HEAD:backend)
+[ "$QA_TREE" = "$PROD_TREE" ] || die "QA ($(git -C "$QA_DIR" log --oneline -1 | cut -c1-60)) and production ($(git -C "$PROD_DIR" log --oneline -1 | cut -c1-60)) run different server code: deploy the same version to both first (push staging and main to the same commit)"
 QA_DB=$(env_get "$QA_DIR" DB_NAME); QA_DB=${QA_DB:-$(env_get "$QA_DIR" MONGO_DB)}; QA_DB=${QA_DB:-nurserypos}
 PROD_DB=$(env_get "$PROD_DIR" DB_NAME); PROD_DB=${PROD_DB:-$(env_get "$PROD_DIR" MONGO_DB)}; PROD_DB=${PROD_DB:-nurserypos}
 QA_PORT=$(env_get "$QA_DIR" HOST_PORT); QA_PORT=${QA_PORT:-8120}
