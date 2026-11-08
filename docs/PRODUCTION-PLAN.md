@@ -656,6 +656,9 @@ A code review of everything production would get (`main...prod-ready`) found 11 
   changing anything (compose.yaml: `pids_limit` next to `deploy.resources.limits`, refused by Docker Compose). A
   rehearsal with real Docker (old QA version and data, then the update as the VM runs it) then found that the
   rollups rebuild command always failed (argparse default). Both fixed with tests and pushed for the second run.
+  Two more stops followed, each before any harm (the running image no longer listed; a skipped migrations step
+  and web `cpus: "2"` on the 1-CPU VM); each fixed with tests. The fourth run went live at 05:10 UTC: QA runs
+  `prod-ready` (6040de2), 22 migrations applied, rollups rebuilt, /readyz 200.
 - WP-11 note: the fake-docker deploy tests cannot catch compose-file or command-line problems; rehearse a deploy
   with real Docker before a release (SESSION-NOTES, "Deploy rehearsal").
 - CI on `prod-ready` also fails the Trivy image scan (HIGH/CRITICAL Debian packages in the base image, mostly Perl,

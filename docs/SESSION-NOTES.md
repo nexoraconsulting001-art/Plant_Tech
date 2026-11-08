@@ -26,6 +26,11 @@ branch map are also in `CLAUDE.md` at the repo root.
   config | grep -q` under pipefail: SIGPIPE) and failed the swap (web `cpus: "2"` on the 1-CPU VM); it switched back
   to the old version by itself. Fixed: the service list is read whole; web CPUs are `WEB_CPUS` (default 1). The
   shared VM has **1 CPU**: no compose limit may exceed it. The fourth QA deploy carries these.
+- **QA is live on `prod-ready` since 8 Nov 05:10 UTC (6040de2):** fourth deploy green. Settings checked, 22
+  migrations applied, web and worker started, ready 3 times in a row, rollups rebuilt (14 shop-days, 7 shops),
+  public /readyz 200 (mongo ok, storage ok). From outside: 65 routes, POST /api/purchases takes Idempotency-Key,
+  /api/config min_app_version 1.1.0 (the QA phones keep working). The demo refresh cron works again (it reads
+  compose.yaml, which is valid now).
 - **Deploy rehearsal, for next time:** a bare clone of the repo as `origin`, its `staging` branch plus a
   smoke-only commit that sets `PIP_CERT` to the sandbox proxy's CA (the image build cannot reach PyPI otherwise;
   the VM needs nothing), a clone of it as `$HOME/Plant_Tech-staging` with a `deploy/.env` (PROJECT_NAME, a free
@@ -50,7 +55,7 @@ branch map are also in `CLAUDE.md` at the repo root.
 - **Still open:** bill correction owner-only (as built)?; Google Play developer account (personal or company; a
   personal one made after Nov 2023 needs a closed test with 12+ testers for 14 days before production, check
   Google's current rule); the other decisions D2-D14, D16, D17 in `docs/PRODUCTION-PLAN.md`.
-- **Next:** confirm the second QA deploy, then the owner's browser test on QA (the owner's own browser app, localhost:8083,
+- **Next:** the owner's browser test on QA (the owner's own browser app, localhost:8083,
   pointed at staging; Claude never types logins there), then the owner's go for the 1.2.0 QA build. Then the two
   overload changes (bills past the in-flight limit by a margin; a slow query answered apart from a pool wait),
   the k6 capacity test plan, and iOS preparation.
