@@ -81,9 +81,13 @@ wait_ready() {
   return 1
 }
 
+running_container() {  # ID of the running web container (empty if none)
+  docker compose ps -q web 2>/dev/null | head -n 1 || true
+}
+
 running_image() {  # image ID of the running web container (empty if none)
   local id
-  id=$(docker compose ps -q web 2>/dev/null | head -n 1 || true)
+  id=$(running_container)
   if [ -n "$id" ]; then docker inspect -f '{{.Image}}' "$id" 2>/dev/null || true; fi
 }
 
@@ -151,10 +155,18 @@ fi
 
 log "$TARGET: deploying $(git log --oneline -1)"
 
-# What runs now is what a failed deploy goes back to.
+# What runs now is what a failed deploy goes back to. The running container's image can be missing from Docker's
+# image list (removed by hand or by a clean-up while the container kept running: "No such image" on 8 Nov on QA);
+# then a copy of the running container is saved as the rollback image instead. Nothing has changed at this point,
+# so if neither works the deploy stops here.
 PREVIOUS=$(running_image)
 if [ -n "$PREVIOUS" ]; then
-  docker tag "$PREVIOUS" "$IMAGE:rollback"
+  if ! docker tag "$PREVIOUS" "$IMAGE:rollback" 2>/dev/null; then
+    log "$TARGET: the running image $PREVIOUS is no longer listed; saving the running container as $IMAGE:rollback"
+    docker commit "$(running_container)" "$IMAGE:rollback" >/dev/null || {
+      log "$TARGET: deploy of $SHA FAILED: could not keep a rollback image; nothing was changed"; exit 1; }
+  fi
+  PREVIOUS="$IMAGE:rollback"
   mark_rollups_stale "$PREVIOUS"  # it keeps billing while the migrations run
 fi
 SWAPPED=0

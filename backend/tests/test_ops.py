@@ -122,7 +122,12 @@ FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE/calls"
 T="$FAKE/tags"; mkdir -p "$T"
 key() { echo "$1" | tr '/:' '__'; }
-resolve() { case "$1" in sha256:*) echo "$1" ;; *) cat "$T/$(key "$1")" 2>/dev/null ;; esac; }
+resolve() {  # an image ID listed in $MISSING_IDS is gone from the image list (its container still runs)
+  case "$1" in
+    sha256:*) case " ${MISSING_IDS:-} " in *" $1 "*) ;; *) echo "$1" ;; esac ;;
+    *) cat "$T/$(key "$1")" 2>/dev/null ;;
+  esac
+}
 if [ "$1" = compose ]; then
   shift
   case "$1" in
@@ -141,6 +146,7 @@ case "$1" in
        exit 0 ;;
   inspect) cat "$FAKE/running" ;;
   tag) id=$(resolve "$2"); [ -n "$id" ] || exit 1; echo "$id" > "$T/$(key "$3")" ;;
+  commit) [ "${COMMIT_RC:-0}" = 0 ] || exit 1; cat "$FAKE/running" > "$T/$(key "$3")" ;;  # same files as it runs
   image)
     case "$2" in
       inspect) id=$(resolve "${@: -1}"); [ -n "$id" ] || exit 1; case "$*" in *'{{.Id}}'*) echo "$id" ;; esac ;;
@@ -333,3 +339,25 @@ def test_unknown_target_or_action():
     for args in (["qa"], ["staging", "nuke"], []):
         r = subprocess.run([BASH, str(DEPLOY / "deploy.sh"), *args], capture_output=True, text=True)
         assert r.returncode == 2 and "usage" in r.stderr
+
+
+def test_a_running_image_missing_from_the_list_is_kept_by_saving_the_container(vm):
+    """8 Nov on QA: the running container's image was no longer listed ("No such image"), so tagging it as the
+    rollback image failed and the deploy stopped. A copy of the running container is the rollback image now."""
+    r, calls, running = vm("staging", MISSING_IDS="sha256:old")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "docker commit cid-web hh-api:rollback" in calls and running == "sha256:new"
+    assert "no longer listed" in (vm.state / "deploy.log").read_text()
+
+
+def test_a_saved_container_is_what_a_failed_deploy_goes_back_to(vm):
+    r, calls, running = vm("staging", MISSING_IDS="sha256:old", HEALTHY="sha256:old")  # the new one never gets ready
+    assert r.returncode == 1 and running == "sha256:old"
+    assert "docker tag hh-api:rollback hh-api:latest" in calls and "rolled back" in r.stdout
+
+
+def test_no_rollback_image_at_all_stops_before_any_change(vm):
+    r, calls, running = vm("staging", MISSING_IDS="sha256:old", COMMIT_RC="1")
+    assert r.returncode == 1 and running == "sha256:old"
+    assert "docker compose build web" not in calls and SWAP not in calls
+    assert "could not keep a rollback image" in (vm.state / "deploy.log").read_text()
