@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Make production's settings file (~/Plant_Tech/deploy/.env) from QA's, for production's first deploy of this
-# version. Run by the owner on the VM, once, before the release:
-#     bash ~/Plant_Tech-staging/deploy/prod-env-from-qa.sh
-# (from QA's checkout: production's checkout still has the old version until the release.)
+# version. Run by the owner on the VM, once, before the release (docs/PROD-RELEASE.md, step A1). Before the
+# release neither checkout on the VM has this file yet, so it is taken from GitHub without deploying anything:
+#     cd ~/Plant_Tech-staging && git fetch -q origin prod-ready && git show origin/prod-ready:deploy/prod-env-from-qa.sh > /tmp/prod-env-from-qa.sh && bash /tmp/prod-env-from-qa.sh
 #
 # QA's settings are the starting point (the Claude key, the photo storage keys, the limits), and these are made
 # production's own: ENV=production, a new JWT_SECRET (logins of the two never mix), production's own photo
