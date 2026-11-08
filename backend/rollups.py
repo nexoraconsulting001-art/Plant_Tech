@@ -302,15 +302,38 @@ def touched_since(day: str) -> str:
     return (date.fromisoformat(day) - timedelta(days=CORRECT_DAYS)).isoformat()
 
 
-if __name__ == "__main__":  # python rollups.py rebuild [--business <id>] [--since <day> | --touched-since <day>]
+def _day(value: str) -> str:
+    return date.fromisoformat(value).isoformat()
+
+
+def parse_args(argv: list[str] | None = None):
+    """The command line: rebuild [--business <id>] [--since <day> | --touched-since <day>]. The day options have
+    no default value: argparse runs a string default through `type`, and date.fromisoformat("") fails, which
+    made every `rebuild --touched-since` (deploy.sh) stop with "invalid value: ''"."""
     import argparse
 
+    parser = argparse.ArgumentParser(prog="python rollups.py")
+    parser.add_argument("command", choices=["rebuild"])
+    parser.add_argument("--business", default="", help="one shop's id (default: every shop)")
+    days = parser.add_mutually_exclusive_group()
+    days.add_argument("--since", type=_day, help="only the days from this date_key (YYYY-MM-DD) on")
+    days.add_argument("--touched-since", type=_day,
+                      help="the days a version without rollups may have changed from this day on (deploy.sh)")
+    return parser.parse_args(argv)
+
+
+def since_of(args) -> str:
+    """The first date_key to rebuild ("" = every day)."""
+    return touched_since(args.touched_since) if args.touched_since else (args.since or "")
+
+
+if __name__ == "__main__":  # python rollups.py rebuild [--business <id>] [--since <day> | --touched-since <day>]
     import db as db_module
     import observability
 
     async def main(args) -> int:
         db_module.set_appname("hara-hisaab-rollups")
-        since = touched_since(args.touched_since) if args.touched_since else args.since
+        since = since_of(args)
         try:
             # No pymongo.timeout() around it: rebuild() limits each step, and one around the whole run would cut a
             # big database's rebuild off part way (a failed shop is logged with the command that repeats it).
@@ -320,13 +343,5 @@ if __name__ == "__main__":  # python rollups.py rebuild [--business <id>] [--sin
         finally:
             await db_module.close()
 
-    parser = argparse.ArgumentParser(prog="python rollups.py")
-    parser.add_argument("command", choices=["rebuild"])
-    parser.add_argument("--business", default="", help="one shop's id (default: every shop)")
-    days = parser.add_mutually_exclusive_group()
-    days.add_argument("--since", default="", type=lambda v: date.fromisoformat(v).isoformat(),
-                      help="only the days from this date_key (YYYY-MM-DD) on")
-    days.add_argument("--touched-since", default="", type=lambda v: date.fromisoformat(v).isoformat(),
-                      help="the days a version without rollups may have changed from this day on (deploy.sh)")
     observability.setup_logging()
-    raise SystemExit(asyncio.run(main(parser.parse_args())))
+    raise SystemExit(asyncio.run(main(parse_args())))

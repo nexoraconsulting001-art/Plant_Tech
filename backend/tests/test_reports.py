@@ -604,3 +604,16 @@ def test_rebuild_since_adds_the_bills_an_old_version_made_during_a_deploy(wired)
     assert shop.get("/api/invoices/summary", params={"day": today.isoformat()}).json()["orders"] == 2
     assert run(_db()[rollups.SALES].find_one({"_id": rollups.day_id(bid, (today - timedelta(days=5)).isoformat())})) is None
     assert run(_db()[rollups.SALES].find_one({"_id": rollups.day_id(bid, stale_old)}))["orders"] == 99  # not read
+
+
+def test_the_rebuild_command_line_used_by_deploy():
+    """Regression (8 Nov QA deploy rehearsal): argparse ran the empty default of --since through the date check, so
+    every `python rollups.py rebuild --touched-since <day>` (deploy.sh step 6) stopped with "invalid value: ''"."""
+    args = rollups.parse_args(["rebuild", "--touched-since", "2026-11-08"])
+    assert rollups.since_of(args) == "2026-11-01"  # minus CORRECT_DAYS: corrected bills keep their sale day
+    assert rollups.since_of(rollups.parse_args(["rebuild"])) == ""
+    args = rollups.parse_args(["rebuild", "--since", "2026-10-01", "--business", "shop-1"])
+    assert rollups.since_of(args) == "2026-10-01" and args.business == "shop-1"
+    for bad in (["rebuild", "--since", "yesterday"], ["rebuild", "--since", "2026-11-01", "--touched-since", "2026-11-02"]):
+        with pytest.raises(SystemExit):
+            rollups.parse_args(bad)
