@@ -652,8 +652,14 @@ A code review of everything production would get (`main...prod-ready`) found 11 
 - WP-11 CI/CD: GHCR images are also tagged by the tree hash of `backend/`, and deploy.sh pulls by it, so a
   docs-only commit no longer breaks a production deploy; the swap starts web and worker only.
 - Owner decisions: D1 (sslip.io for now) and D15 (production wipe approved) are answered; the rest stay open.
-- Not deployed yet: the push to GitHub was refused from the cloud session (the Claude GitHub App is not installed
-  for Plant_Tech). The owner asked for QA to be updated with all fixes; that is the next step once access works.
-- Checks: backend 449 passed, 2 skipped (11 new), ruff clean; app tsc, eslint 0 errors, i18n 850 texts, Node 18/18.
+- QA deploy (8 Nov, the owner asked for it): `prod-ready` pushed into `staging`. The first run stopped before
+  changing anything (compose.yaml: `pids_limit` next to `deploy.resources.limits`, refused by Docker Compose). A
+  rehearsal with real Docker (old QA version and data, then the update as the VM runs it) then found that the
+  rollups rebuild command always failed (argparse default). Both fixed with tests and pushed for the second run.
+- WP-11 note: the fake-docker deploy tests cannot catch compose-file or command-line problems; rehearse a deploy
+  with real Docker before a release (SESSION-NOTES, "Deploy rehearsal").
+- CI on `prod-ready` also fails the Trivy image scan (HIGH/CRITICAL Debian packages in the base image, mostly Perl,
+  with fixes available). It does not block deploys (they run the backend tests only); fix proposed to the owner.
+- Checks: backend 450 passed, 2 skipped (12 new), ruff clean; app tsc, eslint 0 errors, i18n 850 texts, Node 18/18.
 - Still open from 3 Nov: bills past the in-flight limit by a small margin, a pool wait answered apart from a slow
   query, and the k6 capacity test on staging-sized hardware.

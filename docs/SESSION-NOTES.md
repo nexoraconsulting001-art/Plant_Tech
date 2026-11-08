@@ -5,11 +5,22 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
 branch map are also in `CLAUDE.md` at the repo root.
 
 ## Start here (8 Nov 2026)
-- **Branch:** work on `prod-ready`. On 8 Nov the code review's fixes were committed there (776f980, see
-  "Code review fixes" below). **Not on GitHub yet:** the cloud session's push was refused (403, the Claude GitHub
-  App is not installed for Plant_Tech). Once the owner installs it (or pushes from their PC): push `prod-ready`,
-  then fast-forward `staging` to it (`git push origin prod-ready:staging`; `staging` is an ancestor) to deploy QA.
-  The owner asked for that QA update on 8 Nov ("get the app back to QA updated with all fixes").
+- **Branch:** work on `prod-ready`. On 8 Nov the code review's fixes went in (776f980, see "Code review fixes"
+  below), the owner connected GitHub, and `prod-ready` was pushed and fast-forwarded into `staging` (the owner
+  asked for the QA update: "get the app back to QA updated with all fixes").
+- **QA deploy, 8 Nov:** the first run (c45e477) stopped at its first compose call, before anything changed: Docker
+  Compose refuses `pids_limit` next to `deploy.resources.limits` (fixed in 07c84aa: limits in
+  `deploy.resources.limits.pids`). A rehearsal with real Docker in the cloud session then deployed the old QA
+  commit (0f47049) with data, and updated it the way the VM does (old deploy.sh syncs and runs the new one); it
+  found that `python rollups.py rebuild --touched-since <day>` always failed (argparse ran the empty `--since`
+  default through the date check; fixed in d655670). The rehearsal then passed: old 1.1.0 login, old bill and
+  stock intact, new bills continue the number series, retry key replays, Home totals right, MongoDB a replica set.
+  Those two fixes were pushed to `prod-ready` and `staging` for the second QA deploy.
+- **Deploy rehearsal, for next time:** a bare clone of the repo as `origin`, its `staging` branch plus a
+  smoke-only commit that sets `PIP_CERT` to the sandbox proxy's CA (the image build cannot reach PyPI otherwise;
+  the VM needs nothing), a clone of it as `$HOME/Plant_Tech-staging` with a `deploy/.env` (PROJECT_NAME, a free
+  HOST_PORT, JWT_SECRET, DB_NAME for the old version), then `HOME=<that home> bash .../deploy/deploy.sh staging`.
+  The fake-docker tests (`tests/test_ops.py`) do not catch compose-file or CLI problems; this does.
 - **Deployed:** QA runs `staging` as last pushed (before the testers' round); production runs the old `main`
   (19ca6f3). Checked for the QA deploy: the VM's old deploy.sh syncs and runs the new one; MongoDB keeps its
   volume and becomes a one-member replica set; the demo shop keeps its daily refresh (migration 1002); the
@@ -29,7 +40,7 @@ branch map are also in `CLAUDE.md` at the repo root.
 - **Still open:** bill correction owner-only (as built)?; Google Play developer account (personal or company; a
   personal one made after Nov 2023 needs a closed test with 12+ testers for 14 days before production, check
   Google's current rule); the other decisions D2-D14, D16, D17 in `docs/PRODUCTION-PLAN.md`.
-- **Next:** push and QA deploy, then the owner's browser test on QA (the owner's own browser app, localhost:8083,
+- **Next:** confirm the second QA deploy, then the owner's browser test on QA (the owner's own browser app, localhost:8083,
   pointed at staging; Claude never types logins there), then the owner's go for the 1.2.0 QA build. Then the two
   overload changes (bills past the in-flight limit by a margin; a slow query answered apart from a pool wait),
   the k6 capacity test plan, and iOS preparation.
@@ -123,6 +134,8 @@ issues; 10 are fixed with tests, one is left by the owner's D1 answer.
   commit tag); deploy.yml tags both. Before, a docs-only or app-only commit after a backend push made the
   production deploy fail. The swap now starts web and worker only (`--no-deps`), so migrate and data-owner no
   longer run twice per deploy.
+- **Found by the QA deploy and its rehearsal:** compose.yaml's process limits (pids_limit) made Docker Compose refuse
+  the project; `rollups.py rebuild --touched-since` always failed. Both fixed (07c84aa, d655670) with a test.
 - **CSV exports** escape typed names a spreadsheet would run as a formula (`common.csv_text`; invoices.csv,
   GSTR-1 names and HSN descriptions).
 - **Smaller:** PATCH /customers answers 409 (not 500) when another phone took the number a moment before; PUT
@@ -130,7 +143,7 @@ issues; 10 are fixed with tests, one is left by the owner's D1 answer.
   markers (`storage_client.delete_many`).
 - **Left as it is (owner, D1):** eas-update.yml falls back to the sslip.io address for the production channel;
   revisit with the domain.
-- **Checks on 8 Nov:** backend 449 passed, 2 skipped (11 new tests; ruff clean; shellcheck clean on deploy.sh);
+- **Checks on 8 Nov:** backend 450 passed, 2 skipped (12 new tests; ruff clean; shellcheck clean on deploy.sh);
   app tsc clean, eslint 0 errors, i18n 850 texts, Node tests 18/18. Not checked in a browser or on a phone yet.
 
 ## Production readiness and scale (Nov 2026, local branch `prod-ready`, not pushed)
