@@ -22,6 +22,10 @@ branch map are also in `CLAUDE.md` at the repo root.
   deploy.sh now keeps a rollback image when it can (tag, else commit); when it cannot, staging deploys without an
   automatic rollback and says so in the log ("WARNING: no rollback image"), production stops before any change
   (7159a08, 7613128; tests in test_ops.py). The third QA deploy carries these.
+- **Third QA deploy (a09eb5c):** built the image on the VM, then skipped the settings/migrations step (`compose
+  config | grep -q` under pipefail: SIGPIPE) and failed the swap (web `cpus: "2"` on the 1-CPU VM); it switched back
+  to the old version by itself. Fixed: the service list is read whole; web CPUs are `WEB_CPUS` (default 1). The
+  shared VM has **1 CPU**: no compose limit may exceed it. The fourth QA deploy carries these.
 - **Deploy rehearsal, for next time:** a bare clone of the repo as `origin`, its `staging` branch plus a
   smoke-only commit that sets `PIP_CERT` to the sandbox proxy's CA (the image build cannot reach PyPI otherwise;
   the VM needs nothing), a clone of it as `$HOME/Plant_Tech-staging` with a `deploy/.env` (PROJECT_NAME, a free
