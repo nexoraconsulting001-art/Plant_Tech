@@ -8,7 +8,9 @@ branch map are also in `CLAUDE.md` at the repo root.
 - **Afternoon, 8 Nov:** plant detection made consistent and tied to the shop's stock, an "App build" button in
   GitHub Actions, a fix for reloaded web screens, and a full local browser test (sections "Plant detection",
   "Browser test before the QA build", "App build button", "Firebase file for notifications" below). Pushed to
-  `prod-ready` and into `staging` for QA; the QA app build waits for the owner's EXPO_TOKEN in GitHub.
+  `prod-ready` and into `staging`: QA runs 8add06b since 07:15 UTC (deploy green, migration 0602 applied,
+  /readyz 200, 65 routes, identify-plant answers 401 without login). The QA app build waits for the owner:
+  EXPO_TOKEN in the GitHub `staging` environment, the default branch (see "App build button"), and their go.
 - **Branch:** work on `prod-ready`. On 8 Nov the code review's fixes went in (776f980, see "Code review fixes"
   below), the owner connected GitHub, and `prod-ready` was pushed and fast-forwarded into `staging` (the owner
   asked for the QA update: "get the app back to QA updated with all fixes").
