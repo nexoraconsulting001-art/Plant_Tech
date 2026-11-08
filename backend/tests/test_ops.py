@@ -356,8 +356,17 @@ def test_a_saved_container_is_what_a_failed_deploy_goes_back_to(vm):
     assert "docker tag hh-api:rollback hh-api:latest" in calls and "rolled back" in r.stdout
 
 
-def test_no_rollback_image_at_all_stops_before_any_change(vm):
-    r, calls, running = vm("staging", MISSING_IDS="sha256:old", COMMIT_RC="1")
+def test_no_rollback_image_at_all(vm, tmp_path):
+    """The running image is gone and the container cannot be copied either (its image files were pruned, as on QA
+    on 8 Nov): production stops before any change; staging goes on without an automatic rollback, says so, and
+    still rebuilds the days the old version billed."""
+    r, calls, running = vm("prod", MISSING_IDS="sha256:old", COMMIT_RC="1")
     assert r.returncode == 1 and running == "sha256:old"
     assert "docker compose build web" not in calls and SWAP not in calls
-    assert "could not keep a rollback image" in (vm.state / "deploy.log").read_text()
+    assert "could not keep a rollback image; nothing was changed" in (vm.state.parent / "prod" / "deploy.log").read_text()
+
+    r, calls, running = vm("staging", MISSING_IDS="sha256:old", COMMIT_RC="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert running == "sha256:new" and SWAP in calls
+    log = (vm.state / "deploy.log").read_text()
+    assert "WARNING: no rollback image could be kept" in log and len(_rebuilds(calls)) == 1

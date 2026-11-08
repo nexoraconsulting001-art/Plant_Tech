@@ -156,18 +156,32 @@ fi
 log "$TARGET: deploying $(git log --oneline -1)"
 
 # What runs now is what a failed deploy goes back to. The running container's image can be missing from Docker's
-# image list (removed by hand or by a clean-up while the container kept running: "No such image" on 8 Nov on QA);
-# then a copy of the running container is saved as the rollback image instead. Nothing has changed at this point,
-# so if neither works the deploy stops here.
+# image list: with Docker's containerd image store a prune can remove an untagged image while its container keeps
+# running ("No such image" on 8 Nov on QA). Then a copy of the running container is saved instead (docker commit;
+# that needs the image's files too, so it may fail as well). With no rollback image at all, staging goes on
+# without an automatic rollback (a broken QA is fixed by the next push, and this deploy leaves a proper one for
+# next time); production stops here, before any change.
 PREVIOUS=$(running_image)
 if [ -n "$PREVIOUS" ]; then
-  if ! docker tag "$PREVIOUS" "$IMAGE:rollback" 2>/dev/null; then
+  if docker tag "$PREVIOUS" "$IMAGE:rollback" 2>/dev/null; then
+    PREVIOUS="$IMAGE:rollback"
+  else
     log "$TARGET: the running image $PREVIOUS is no longer listed; saving the running container as $IMAGE:rollback"
-    docker commit "$(running_container)" "$IMAGE:rollback" >/dev/null || {
-      log "$TARGET: deploy of $SHA FAILED: could not keep a rollback image; nothing was changed"; exit 1; }
+    if docker commit "$(running_container)" "$IMAGE:rollback" >/dev/null; then
+      PREVIOUS="$IMAGE:rollback"
+    elif [ "$TARGET" = staging ]; then
+      log "$TARGET: WARNING: no rollback image could be kept; deploying without an automatic rollback this time"
+      PREVIOUS=""
+    else
+      log "$TARGET: deploy of $SHA FAILED: could not keep a rollback image; nothing was changed"
+      exit 1
+    fi
   fi
-  PREVIOUS="$IMAGE:rollback"
-  mark_rollups_stale "$PREVIOUS"  # it keeps billing while the migrations run
+  if [ -n "$PREVIOUS" ]; then
+    mark_rollups_stale "$PREVIOUS"  # it keeps billing while the migrations run
+  else
+    [ -s "$ROLLUPS_MARK" ] || TZ=IST-5:30 date +%F > "$ROLLUPS_MARK"  # the old version's bills: rebuild its days
+  fi
 fi
 SWAPPED=0
 
