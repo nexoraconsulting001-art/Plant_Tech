@@ -13,6 +13,7 @@ import logging
 from pymongo import UpdateOne
 from pymongo.errors import OperationFailure
 
+from rollups import aggregate
 from routers import library
 from search import library_keys
 
@@ -23,7 +24,7 @@ KEEP_EXISTING_VISIBILITY = True
 
 
 async def _merge_duplicates(db):
-    groups = await (await db.library.aggregate([
+    groups = await (await aggregate(db.library, [
         {"$match": {"removed": False}},
         {"$group": {"_id": "$name_key", "n": {"$sum": 1},
                     "entries": {"$push": {"id": "$id", "source": "$source", "at": "$created_at"}}}},

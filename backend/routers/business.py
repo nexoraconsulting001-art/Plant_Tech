@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 import audit
 import auth
 import gst
+import rollups
 from common import name_key, new_id, now_iso
 from db import get_db
 from errors import AppError
@@ -283,7 +284,7 @@ def _category_view(c: dict) -> dict:
 async def list_categories(user: dict = Depends(auth.current_user)):
     """With how many products each has, in one query (the shop's products that are not deleted)."""
     bid = user["business_id"]
-    cursor = await get_db().categories.aggregate([
+    cursor = await rollups.aggregate(get_db().categories, [
         {"$match": {"business_id": bid}},
         {"$sort": {"name": 1}},
         {"$limit": 500},

@@ -10,6 +10,7 @@ import struct
 import time
 import tracemalloc
 import zlib
+from datetime import datetime, timedelta, timezone
 
 import httpx2
 import pytest
@@ -95,22 +96,97 @@ def test_model_per_route_and_fallback_only_where_supported(client, fake, monkeyp
     assert body["output_config"]["format"]["type"] == "json_schema"
 
 
-def test_fixed_instructions_in_system_prompt_and_no_catalogue(client, fake, monkeypatch):
+def test_fixed_instructions_then_the_shops_stock_list(client, fake, monkeypatch):
+    """Claude chooses from the shop's own products (owner, 8 Nov 2026: the same plant must come back as the same
+    product). The fixed instructions stay the same bytes for every shop; the list follows them, sorted, so the same
+    stock sends the same bytes (cached for that shop's next scans)."""
     shop = Shop(client)
-    shop.product("Money Plant", 250, 10)
     shop.product("Zamioculcas Special", 900, 2)
+    shop.product("Money Plant", 250, 10, botanical_name="Epipremnum aureum")
     assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).status_code == 200
     _, body = fake[-1]
-    assert body["system"] == ai_client.SYSTEM_PLANT  # the same bytes for every shop: cacheable
+    stock = ai_client.STOCK_HEAD + "\n- Money Plant (Epipremnum aureum)\n- Zamioculcas Special"
+    # instructions + list are past the model's cache minimum: the mark at the end caches both for this shop
+    assert body["system"] == [{"type": "text", "text": ai_client.SYSTEM_PLANT},
+                              {"type": "text", "text": stock, "cache_control": {"type": "ephemeral"}}]
     content = body["messages"][0]["content"]
     assert [c["type"] for c in content] == ["image", "text"]
     assert "Indoor Plants, Pots" in content[-1]["text"]
-    assert "Zamioculcas" not in json.dumps(body)  # the shop's products are no longer sent
-    # once long enough to cache (here: a lower threshold), the system prompt carries the cache mark
-    monkeypatch.setenv("AI_CACHE_MIN_TOKENS", "1")
+    assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64(color=(1, 2, 3))}).status_code == 200
+    assert fake[-1][1]["system"] == body["system"]  # the same stock, the same bytes
+    # below the minimum (here: a higher threshold) the mark is left out, as it would do nothing
+    monkeypatch.setenv("AI_CACHE_MIN_TOKENS", "100000")
     assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).status_code == 200
-    _, body = fake[-1]
-    assert body["system"] == [{"type": "text", "text": ai_client.SYSTEM_PLANT, "cache_control": {"type": "ephemeral"}}]
+    assert fake[-1][1]["system"][-1] == {"type": "text", "text": stock}
+    monkeypatch.delenv("AI_CACHE_MIN_TOKENS")
+    other = Shop(client, phone="9811155667", name="Bina")  # a shop without products says so
+    assert other.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).status_code == 200
+    assert fake[-1][1]["system"][1]["text"] == ai_client.STOCK_NONE
+    # the bill and name look-ups are unchanged: one fixed system prompt
+    assert shop.post("/api/ai/scan-invoice", {"image_base64": photo_b64()}).status_code == 200
+    assert _system_text(fake[-1][1]) == ai_client.SYSTEM_INVOICE
+
+
+def _plant(**answer):
+    return lambda body: (200, claude_message(json.dumps({**PLANT, **answer})))
+
+
+def test_claudes_choice_from_the_stock_list_wins_and_is_checked(client, fake):
+    shop = Shop(client)
+    pothos = shop.product("Pothos Golden 6 inch", 180, 8)
+    snake = shop.product("Snake Plant", 300, 4)
+    money = shop.product("Money Plant", 250, 10)
+    # Claude named it freely as "Money Plant" but chose the shop's own "Pothos Golden 6 inch" from the list
+    fake.reply = _plant(stock_match="Pothos Golden 6 inch", stock_alternatives=["Snake Plant", "Invented Plant"])
+    r = shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()
+    assert r["matched_product"]["id"] == pothos["id"] and r["matched_catalog_name"] == "Pothos Golden 6 inch"
+    ids = [p["id"] for p in r["recommended_products"]]
+    assert ids[0] == snake["id"] and money["id"] in ids and pothos["id"] not in ids  # never a made-up name
+    assert len(ids) <= 4 and all("selling_price" in p for p in r["recommended_products"])
+    assert r["similar_products"] == []  # older apps: only when nothing matched, as before
+    # a name that is not in the shop is ignored: back to comparing names
+    fake.reply = _plant(stock_match="Golden Devil's Ivy", stock_alternatives=[])
+    assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()["matched_product"]["id"] == money["id"]
+    # case, spacing and a copied botanical name in brackets do not matter
+    fake.reply = _plant(plant_name="Snake", scientific_name="", alternatives=[],
+                        stock_match="  snake  plant (Dracaena trifasciata)")
+    assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()["matched_product"]["id"] == snake["id"]
+
+
+def test_names_in_other_languages_are_recommended_from_stock(client, fake):
+    """No exact match, but the shop's search knows the plant under another name: shown as "in your stock"."""
+    shop = Shop(client)
+    rose = shop.product("Rose", 120, 6)
+    fake.reply = _plant(plant_name="Gulab", scientific_name="", alternatives=[], stock_match="", stock_alternatives=[])
+    r = shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()
+    assert r["matched_product"] is None
+    assert [p["id"] for p in r["recommended_products"]] == [rose["id"]]
+    assert [p["id"] for p in r["similar_products"]] == [rose["id"]]  # older apps show it too
+
+
+def test_the_same_photo_is_answered_from_memory(client, fake, monkeypatch):
+    monkeypatch.setenv("AI_PHOTO_CACHE_HOURS", "24")
+    shop = Shop(client)
+    shop.product("Money Plant", 250, 10)
+    first = shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()
+    fake.reply = _plant(plant_name="Something Else", scientific_name="", alternatives=[])  # would differ
+    again = shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()
+    assert again == first and len(fake) == 1  # no second call to Claude ...
+    assert _usage(shop)["count"] == 1  # ... and no second scan used
+    other = shop.post("/api/ai/identify-plant", {"image_base64": photo_b64(color=(9, 9, 9))}).json()
+    assert other["plant_name"] == "Something Else" and len(fake) == 2  # another photo is asked
+    run(db().ai_photo_answers.update_many({}, {"$set": {"expires_at": datetime.now(timezone.utc) - timedelta(minutes=1)}}))
+    assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()["plant_name"] == "Something Else"
+    assert len(fake) == 3  # forgotten after its time
+    # an answer Claude could not give is not remembered: the next try asks again
+    fake.reply = lambda body: (200, claude_message("not json"))
+    photo = photo_b64(color=(50, 60, 70))
+    assert shop.post("/api/ai/identify-plant", {"image_base64": photo}).status_code == 422
+    fake.reply = _plant()
+    assert shop.post("/api/ai/identify-plant", {"image_base64": photo}).status_code == 200 and len(fake) == 5
+    # another shop never gets this shop's answer
+    other_shop = Shop(client, phone="9811155667", name="Bina")
+    assert other_shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).status_code == 200 and len(fake) == 6
 
 
 def test_identification_still_matches_without_the_catalogue(client, fake):

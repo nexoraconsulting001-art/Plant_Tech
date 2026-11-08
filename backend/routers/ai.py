@@ -9,8 +9,10 @@ AI_DAILY_LIMIT scans a day, plant photos and bill pages together (kind "scan"), 
 (decision D4: e.g. a trial's daily scans, paid tiers' monthly ones) only need `allowance` to answer
 differently. A user may also start at most AI_USER_RATE scans (ratelimit.py, default 20 a minute).
 """
+import hashlib
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +23,7 @@ from pymongo.errors import DuplicateKeyError
 
 import ai_client
 import auth
+import catalog_search
 import ratelimit
 import storage_client
 from common import date_key, name_key
@@ -38,6 +41,16 @@ logger = logging.getLogger(__name__)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 SCAN = "scan"  # the allowance plant photos and bill pages share
 NAME_FIELDS = {"_id": 0, "id": 1, "name": 1, "botanical_name": 1}  # all that best_product reads
+RECOMMENDED = 4  # "in your stock" products shown with a scan's result
+
+
+def photo_memory_hours() -> float:
+    """How long a plant photo's answer is remembered (AI_PHOTO_CACHE_HOURS, default 24; 0 = off). The same photo
+    sent again (a retry after no answer, the same picture picked again) gets the same answer and uses no scan."""
+    try:
+        return max(0.0, float(os.environ.get("AI_PHOTO_CACHE_HOURS", "24")))
+    except ValueError:
+        return 24.0
 
 
 class ImagePayload(BaseModel):
@@ -84,17 +97,59 @@ async def _run(db, business_id: str, n: int, period: str, call):
         raise err
 
 
+def _listed(by_key: dict[str, dict], name: str) -> dict | None:
+    """The shop's product Claude copied from its list (name_key: case and spaces do not matter), or None for a
+    name that is not one of them (Claude must never invent a product)."""
+    p = by_key.get(name_key(name))
+    if p is None and "(" in name:  # the botanical name in brackets copied along
+        p = by_key.get(name_key(name.split("(")[0]))
+    return p
+
+
+async def _remembered(db, key: str) -> dict | None:
+    doc = await db.ai_photo_answers.find_one({"_id": key, "expires_at": {"$gt": datetime.now(timezone.utc)}},
+                                             {"_id": 0, "result": 1})
+    return doc["result"] if doc else None
+
+
+async def _remember(db, key: str, result: dict, hours: float):
+    now = datetime.now(timezone.utc)
+    await db.ai_photo_answers.replace_one({"_id": key}, {"result": result, "created_at": now,
+                                                         "expires_at": now + timedelta(hours=hours)}, upsert=True)
+
+
 @router.post("/identify-plant")
 async def identify(body: ImagePayload, user: dict = Depends(auth.require("sell", "stock"))):
+    """What the photo shows and which of the shop's products it is.
+
+    Consistency: Claude chooses from the shop's own product list (sent with the photo), and that choice is only
+    used when it is really one of the products. Its names are also matched through the shop's search, which knows
+    Hindi, Hinglish and other names from the shared catalogue ("Pothos" finds Money Plant). The same photo is
+    answered from memory for AI_PHOTO_CACHE_HOURS without using a scan.
+    Answer: matched_product (or None), recommended_products (other close products in stock, best first; with a
+    match they are the "not this one?" choices), and for older apps similar_products (the same list, only when
+    nothing matched) and matched_catalog_name."""
     db = get_db()
     bid = user["business_id"]
     await _limit_user(user)
-    period = await use_quota(db, bid)
+    try:
+        image = ai_client.decode_b64(body.image_base64)
+    except ai_client.BadImage as e:
+        raise HTTPException(400, str(e))
+    hours = photo_memory_hours()
+    memory_key = f"{bid}:{hashlib.sha256(image).hexdigest()}"
+    stock = await db.products.find({"business_id": bid, "deleted_at": None}, NAME_FIELDS).to_list(5000)
     cats = await db.categories.find({"business_id": bid}, {"_id": 0}).to_list(500)
-    result = await _run(db, bid, 1, period, lambda: ai_client.identify_plant(
-        ai_client.decode_b64(body.image_base64), [c["name"] for c in cats]))
+    result = await _remembered(db, memory_key) if hours else None
+    if result is None:
+        period = await use_quota(db, bid)
+        result = await _run(db, bid, 1, period, lambda: ai_client.identify_plant(
+            image, [c["name"] for c in cats], stock))
+        if hours and result.get("kind") != "unknown":
+            await _remember(db, memory_key, dict(result), hours)
+    result = dict(result)
     kind = result.pop("kind")
-    logger.info("identify: kind=%s reason=%s", kind, result.pop("reason"))
+    logger.info("identify: kind=%s reason=%s", kind, result.pop("reason", ""))
     if kind == "bill":
         raise AppError(422, "This looks like a supplier bill. To add stock from a bill, use Supplier bill.",
                        "looks_like_bill")
@@ -104,15 +159,31 @@ async def identify(body: ImagePayload, user: dict = Depends(auth.require("sell",
     if kind == "unknown" or not result["plant_name"]:
         raise AppError(422, "This item could not be identified. Please retake the photo in good light, "
                             "or search by name.", "not_identified")
-    names = [result["plant_name"], result["scientific_name"], *result["alternatives"]]
-    candidates = await db.products.find({"business_id": bid, "deleted_at": None}, NAME_FIELDS).to_list(5000)
-    matched, similar = best_product(candidates, names)
-    wanted = [p["id"] for p in ([matched] if matched else similar)]
-    full = {p["id"]: p for p in await db.products.find({"business_id": bid, "id": {"$in": wanted}},
+
+    by_key: dict[str, dict] = {}
+    for p in stock:
+        by_key.setdefault(name_key(p["name"]), p)
+    chosen = _listed(by_key, result.get("stock_match") or "")
+    chosen_also = [p for n in result.get("stock_alternatives") or [] if (p := _listed(by_key, n))]
+    names = [n for n in (result["plant_name"], result["scientific_name"], *result["alternatives"]) if n]
+    matched, similar = best_product(stock, names)
+    matched = chosen or matched  # Claude saw the photo and the list: its choice wins over a name comparison
+    found: list[dict] = []
+    for n in names[:4]:  # the shop's search, whole names only: Hindi, Hinglish and catalogue names too
+        found += await catalog_search.find_products(db, bid, n, limit=RECOMMENDED, whole=True)
+    ranked, seen = [], {matched["id"]} if matched else set()
+    for p in [*chosen_also, *similar, *found]:
+        if p["id"] not in seen:
+            seen.add(p["id"])
+            ranked.append(p["id"])
+    wanted = ([matched["id"]] if matched else []) + ranked[:RECOMMENDED]
+    full = {p["id"]: p for p in await db.products.find({"business_id": bid, "id": {"$in": wanted}, "deleted_at": None},
                                                          {"_id": 0}).to_list(None)}
-    shown = [full[i] for i in wanted if i in full]
-    result["matched_product"] = (await views(db, user, shown))[0] if matched and shown else None
-    result["similar_products"] = await views(db, user, shown) if not matched else []
+    shown = await views(db, user, [full[i] for i in wanted if i in full])
+    by_id = {p["id"]: p for p in shown}
+    result["matched_product"] = by_id.get(matched["id"]) if matched else None
+    result["recommended_products"] = [by_id[i] for i in ranked[:RECOMMENDED] if i in by_id]
+    result["similar_products"] = [] if result["matched_product"] else result["recommended_products"]
     result["matched_catalog_name"] = result["matched_product"]["name"] if result["matched_product"] else ""
     cat = next((c for c in cats if c["name"] == result.get("suggested_category")), None)
     result["suggested_category_id"] = cat["id"] if cat else None

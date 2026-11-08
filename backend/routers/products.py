@@ -17,6 +17,7 @@ from pymongo.errors import DuplicateKeyError
 
 import auth
 import catalog_search
+import rollups
 from catalog_search import FIELDS, library_images
 from common import name_key, new_id, now_iso
 from db import get_db
@@ -214,7 +215,7 @@ async def product_counts(category_id: str = "", user: dict = Depends(auth.requir
     if category_id:
         q["category_id"] = category_id
     s, m = "$s", "$m"
-    rows = await (await get_db().products.aggregate([
+    rows = await (await rollups.aggregate(get_db().products, [
         {"$match": q},
         {"$project": {"_id": 0, "s": {"$ifNull": ["$stock", 0]}, "m": {"$ifNull": ["$min_stock", 0]}}},
         {"$group": {"_id": None, "all": {"$sum": 1},

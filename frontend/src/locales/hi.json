@@ -848,5 +848,9 @@
   "Already saved": "पहले ही सेव हो चुका है",
   "The stock may or may not have been added. Tap Add to stock again: it will not be added twice.": "हो सकता है स्टॉक जुड़ गया हो, हो सकता है न जुड़ा हो। \"स्टॉक में जोड़ें\" फिर से टैप करें: स्टॉक दो बार नहीं जुड़ेगा।",
   "Shop not found.": "दुकान नहीं मिली।",
-  "This supplier bill was already saved before your last changes. Those changes are not in it.": "यह सप्लायर बिल आपके पिछले बदलावों से पहले ही सेव हो चुका था। वे बदलाव इसमें नहीं हैं।"
+  "This supplier bill was already saved before your last changes. Those changes are not in it.": "यह सप्लायर बिल आपके पिछले बदलावों से पहले ही सेव हो चुका था। वे बदलाव इसमें नहीं हैं।",
+  "Not this one? Other matches in your stock": "यह नहीं? आपके स्टॉक में मिलते-जुलते दूसरे प्रोडक्ट",
+  "This may be {{name}}, which you already have.": "यह {{name}} हो सकता है, जो आपके पास पहले से है।",
+  "Open {{name}}": "{{name}} खोलें",
+  "Add as new": "नया जोड़ें"
 }

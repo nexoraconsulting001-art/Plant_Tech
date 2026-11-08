@@ -8,11 +8,13 @@
 """
 import logging
 
+from rollups import aggregate
+
 log = logging.getLogger("migrations")
 
 
 async def up(db):
-    dupes = await db.uploads.aggregate([
+    dupes = await aggregate(db.uploads, [
         {"$sort": {"created_at": 1, "_id": 1}},
         {"$group": {"_id": "$path", "keep": {"$first": "$_id"}, "all": {"$push": "$_id"}, "n": {"$sum": 1}}},
         {"$match": {"n": {"$gt": 1}}},

@@ -9,6 +9,7 @@ import logging
 
 from pymongo import UpdateOne
 
+from rollups import aggregate
 from routers.products import next_sku
 
 log = logging.getLogger("migrations")
@@ -20,7 +21,7 @@ _NUMBER = {"$let": {  # 12 for "NP-0012", 0 for any other code
 
 
 async def up(db):
-    shops = await (await db.products.aggregate([
+    shops = await (await aggregate(db.products, [
         {"$group": {"_id": "$business_id", "n": {"$sum": 1}, "top": {"$max": _NUMBER}}},
     ], allowDiskUse=True)).to_list(None)
     ops = [UpdateOne({"_id": f"sku:{s['_id']}"}, {"$max": {"seq": max(s["n"], s["top"] or 0)}}, upsert=True)
@@ -28,7 +29,7 @@ async def up(db):
     for i in range(0, len(ops), 1000):
         await db.counters.bulk_write(ops[i:i + 1000], ordered=False)
 
-    twins = await (await db.products.aggregate([
+    twins = await (await aggregate(db.products, [
         {"$match": {"sku": {"$type": "string"}}},
         {"$group": {"_id": {"b": "$business_id", "s": "$sku"}, "n": {"$sum": 1},
                     "products": {"$push": {"id": "$id", "at": "$created_at"}}}},

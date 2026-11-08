@@ -1,12 +1,18 @@
 // Login state: the token (kept in secure storage) and the current user with their permissions.
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-import { apiGet, apiPost, setApiToken, setOnUnauthorized } from "@/src/api";
+import { apiGet, apiPost, setApiToken, setOnUnauthorized, waitForLogin } from "@/src/api";
 import { unregisterPush } from "@/src/push";
 import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
 
 const TOKEN_KEY = "nurserypos_token_v1";
+
+// Read the saved login as soon as the app loads, before any screen asks the server (api.ts waits for it). The
+// provider below reads it again to load the user.
+waitForLogin(storage.secureGet<string | null>(TOKEN_KEY, null).then((saved) => {
+  if (saved) setApiToken(saved);
+}));
 
 export type Permission = "sell" | "stock" | "customers" | "reports";
 

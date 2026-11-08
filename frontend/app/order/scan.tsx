@@ -36,7 +36,7 @@ const SEARCH_AFTER_MS = 250;
 type Stage =
   | { kind: "start" }
   | { kind: "checking" }
-  | { kind: "found"; product: Product; confidence?: string }
+  | { kind: "found"; product: Product; confidence?: string; others: Product[] }
   | { kind: "new"; name: string; botanical: string; categoryId: string | null; similar: Product[] };
 
 export default function OrderScan() {
@@ -63,12 +63,14 @@ export default function OrderScan() {
     setStage({ kind: "checking" });
     try {
       const r = await apiPost("/ai/identify-plant", { image_base64: out.result.base64 });
+      // recommended_products: the shop's other close products (a server before them sends similar_products only)
+      const others: Product[] = r.recommended_products ?? r.similar_products ?? [];
       if (r.matched_product) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-        setStage({ kind: "found", product: r.matched_product, confidence: r.confidence_label });
+        setStage({ kind: "found", product: r.matched_product, confidence: r.confidence_label, others });
       } else {
         setStage({ kind: "new", name: r.plant_name, botanical: r.scientific_name || "",
-          categoryId: r.suggested_category_id ?? null, similar: r.similar_products ?? [] });
+          categoryId: r.suggested_category_id ?? null, similar: others });
       }
     } catch (e: any) {
       restart();
@@ -108,14 +110,18 @@ export default function OrderScan() {
 
   if (openedWithout) return <Redirect href="/order/customer" />;
   if (stage.kind === "found") {
-    return <Found product={stage.product} confidence={stage.confidence} photoUri={photo?.uri} onBack={restart} onAdded={added} />;
+    // Picking one of the other matches: it opens, and the one shown before joins the list of other matches.
+    const pickOther = (p: Product) =>
+      setStage({ kind: "found", product: p, others: [stage.product, ...stage.others.filter((o) => o.id !== p.id)] });
+    return <Found key={stage.product.id} product={stage.product} confidence={stage.confidence} others={stage.others}
+      photoUri={photo?.uri} onBack={restart} onAdded={added} onPick={pickOther} />;
   }
   if (stage.kind === "new") {
     return <NotInStock initial={stage} photo={photo} onBack={restart} onAdded={added}
-      onPick={(p) => setStage({ kind: "found", product: p })} />;
+      onPick={(p) => setStage({ kind: "found", product: p, others: [] })} />;
   }
   return <Start checking={stage.kind === "checking"} photoUri={photo?.uri} onCapture={capture} focusSearch={focusSearch}
-    onPick={(p) => setStage({ kind: "found", product: p })}
+    onPick={(p) => setStage({ kind: "found", product: p, others: [] })}
     onNew={(name) => { setPhoto(null); setStage({ kind: "new", name, botanical: "", categoryId: null, similar: [] }); }} />;
 }
 
@@ -247,8 +253,9 @@ function CartBar() {
   );
 }
 
-function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
-  product: Product; confidence?: string; photoUri?: string; onBack: () => void; onAdded: (next: "scan" | "cart") => void;
+function Found({ product: p, confidence, others, photoUri, onBack, onAdded, onPick }: {
+  product: Product; confidence?: string; others: Product[]; photoUri?: string; onBack: () => void;
+  onAdded: (next: "scan" | "cart") => void; onPick: (p: Product) => void;
 }) {
   const { t } = useTranslation();
   const router = useRouter();
@@ -319,6 +326,26 @@ function Found({ product: p, confidence, photoUri, onBack, onAdded }: {
               <Button title={t("Add stock")} icon="package-variant-plus" variant="outline" size="md"
                 onPress={() => router.push({ pathname: "/products/[id]", params: { id: p.id } })} />
             )}
+          </View>
+        )}
+
+        {others.length > 0 && (
+          <View style={{ gap: spacing.sm }}>
+            <T v="label">{t("Not this one? Other matches in your stock")}</T>
+            {others.map((o) => (
+              <Pressable key={o.id} testID={`found-other-${o.name}`} onPress={() => onPick(o)}
+                style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 64,
+                  borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line }}>
+                <Thumb path={o.image_path} size={44} />
+                <View style={{ flex: 1 }}>
+                  <T v="bold">{o.name}</T>
+                  <T v="small" color={o.out_of_stock ? colors.red : colors.muted}>
+                    {o.out_of_stock ? t("Out of stock") : t("{{n}} in stock", { n: formatQtyUnit(o.stock, o.unit) })}
+                  </T>
+                </View>
+                <T v="number">{formatCurrency(o.selling_price)}</T>
+              </Pressable>
+            ))}
           </View>
         )}
 

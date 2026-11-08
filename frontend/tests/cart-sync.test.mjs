@@ -8,7 +8,7 @@ import { mock, test } from "node:test";
 
 register("./stubs/hooks.mjs", import.meta.url);
 const { CartSync } = await import("@/src/cart-sync");
-const { apiPost } = await import("@/src/api");
+const { apiGet, apiPost, setApiToken, waitForLogin } = await import("@/src/api");
 
 // The server's answers in turn: a status (with an optional error code and Retry-After), or "offline".
 function serve(...answers) {
@@ -110,4 +110,17 @@ test("any last answer after a db_busy try says an earlier try may have done it",
   assert.equal(tries, 2);
   assert.equal(error.code, "out_of_stock");
   assert.equal(error.maybeDone, true); // an earlier try may have done it; order.ts reads this only with a 503
+});
+
+test("a request made while the saved login is read waits for it and carries the token", async () => {
+  const sent = serve({ status: 200, body: { ok: true } });
+  let restore;
+  waitForLogin(new Promise((resolve) => { restore = resolve; }).then(() => setApiToken("t-saved")));
+  const answer = apiGet("/reports/day");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(sent.length, 0); // not sent before the login is back
+  restore();
+  assert.deepEqual(await answer, { ok: true });
+  assert.equal(sent[0].headers.Authorization, "Bearer t-saved");
+  setApiToken(null);
 });

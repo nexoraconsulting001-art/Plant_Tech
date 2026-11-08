@@ -58,6 +58,17 @@ export default function NewProduct() {
         router.replace({ pathname: "/products/[id]", params: { id: r.matched_product.id } });
         return;
       }
+      // Not sure it is one of the shop's products, but close to one: ask before making a second one.
+      const close: Product | undefined = (r.recommended_products ?? r.similar_products ?? [])[0];
+      if (close) {
+        const pick = await choose(t("Already in your products?"), t("This may be {{name}}, which you already have.", { name: close.name }),
+          t("Open {{name}}", { name: close.name }), t("Add as new"));
+        if (pick === "yes") {
+          router.replace({ pathname: "/products/[id]", params: { id: close.id } });
+          return;
+        }
+        if (pick !== "no") return; // closed without choosing
+      }
       const path = await uploadImage(out.result.base64);
       setForm({ ...emptyProduct, name: r.plant_name, botanical_name: r.scientific_name || "",
         category_id: r.suggested_category_id ?? null, photo_path: path, plant: r.kind === "plant" });

@@ -54,6 +54,7 @@ MAX_IMAGE_EDGE = 1568  # longest edge Claude uses without further downscaling
 # Plant photos may be sent smaller (1024 is planned with Haiku, decision D5); bills keep every pixel Claude uses.
 IMAGE_EDGE = {"plant": int(os.environ.get("AI_IMAGE_EDGE_PLANT") or MAX_IMAGE_EDGE), "invoice": MAX_IMAGE_EDGE}
 MAX_IMAGE_PIXELS = 40_000_000  # phones send about 2-12 MP; the app shrinks photos before upload
+MAX_STOCK_NAMES = 600  # products listed in a plant scan's prompt (about 6 tokens each); a nursery has 50-400
 IMAGE_FORMATS = ("JPEG", "PNG", "WEBP")
 TIMEOUT = anthropic.Timeout(60.0, connect=5.0)
 CALL_TIMEOUT = {"plant": 30.0, "names": 30.0, "invoice": 120.0}  # seconds per try
@@ -113,8 +114,18 @@ SYSTEM_PLANT = (
     "- confidence: integer 0-100\n"
     "- alternatives: up to 3 alternative common names\n"
     "- suggested_category: the best fitting category from the nursery's categories (listed after the photo), "
-    "copied exactly, or empty string"
+    "copied exactly, or empty string\n"
+    "The shop's own products are listed after these instructions. Match the photo against them:\n"
+    "- stock_match: if the photo shows one of the shop's products, its name copied exactly from that list (only "
+    "the name, without anything in brackets); otherwise empty string. Choose a listed product only when it is the "
+    "same plant (species or variety) or the same kind of product; when sizes are listed and the size is not clear, "
+    "choose the most likely one and put the other sizes in stock_alternatives.\n"
+    "- stock_alternatives: up to 3 other names copied exactly from that list that the photo could also show, most "
+    "likely first; empty when none.\n"
+    "Always prefer a listed product's name for the same plant over another name for it."
 )
+STOCK_HEAD = "The shop's own products, one per line (botanical name in brackets where known):"
+STOCK_NONE = "The shop has no products yet: leave stock_match and stock_alternatives empty."
 SYSTEM_INVOICE = (
     "You are an OCR and data extraction assistant for a plant nursery in India. You extract supplier "
     "purchase invoice details from photos of bills. Bills may be printed or handwritten and may mix "
@@ -153,6 +164,8 @@ class PlantId(BaseModel):
     confidence: int
     alternatives: List[str]
     suggested_category: str
+    stock_match: str  # a name copied from the shop's product list, or "" (the route checks it is really there)
+    stock_alternatives: List[str]
 
 
 class NameTerms(BaseModel):
@@ -286,13 +299,20 @@ def _image_block(jpeg: bytes) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
 
-def _system(text: str):
+def _system(text: str, context: str | None = None):
     """The system prompt, marked for caching once it is long enough to be cached (about 4 characters a token);
-    below the model's minimum the mark would do nothing."""
+    below the model's minimum the mark would do nothing. `context` (a shop's product list) is a second block after
+    the fixed instructions, so the instructions stay the same bytes for every shop and the mark at the end caches
+    instructions + list for that shop's next scans (5 minutes)."""
     min_tokens = int(os.environ.get("AI_CACHE_MIN_TOKENS") or CACHE_MIN_TOKENS)
-    if len(text) // 4 >= min_tokens:
-        return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
-    return text
+    if context is None:
+        if len(text) // 4 >= min_tokens:
+            return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+        return text
+    blocks = [{"type": "text", "text": text}, {"type": "text", "text": context}]
+    if (len(text) + len(context)) // 4 >= min_tokens:
+        blocks[-1]["cache_control"] = {"type": "ephemeral"}
+    return blocks
 
 
 _FORMATS: dict[type, dict] = {}
@@ -315,7 +335,7 @@ def _alert(e: Exception):
 
 
 async def _ask(kind: str, system: str, prompt: str, images: list[bytes], schema, effort: str, max_tokens: int,
-               normalised: bool = False):
+               normalised: bool = False, context: str | None = None):
     """Send photos (pages of one bill are labelled) + prompt; the parsed schema object, or None on a refusal or
     an answer that does not fit the schema. Raises Truncated at max_tokens, AIUnavailable when Claude could not
     be used (the scan is given back) and BadImage for a photo that cannot be read."""
@@ -338,7 +358,7 @@ async def _ask(kind: str, system: str, prompt: str, images: list[bytes], schema,
     content.append({"type": "text", "text": prompt})
 
     model = _settings.model_for(kind)
-    params = dict(model=model, max_tokens=max_tokens, system=_system(system),
+    params = dict(model=model, max_tokens=max_tokens, system=_system(system, context),
                   messages=[{"role": "user", "content": content}],
                   output_config={"effort": effort, "format": _output_format(schema)},
                   timeout=anthropic.Timeout(CALL_TIMEOUT.get(kind, 60.0), connect=5.0))
@@ -408,23 +428,37 @@ async def _ask(kind: str, system: str, prompt: str, images: list[bytes], schema,
     return parsed
 
 
-async def identify_plant(image: bytes, categories: list[str] | None = None) -> dict:
-    """What the photo shows; for a plant or nursery product, its name and category.
+def stock_context(stock: list[dict] | None) -> str:
+    """The shop's products for the prompt: one "- name (botanical)" line each, sorted, so the same stock gives the
+    same bytes (cached) and the same list order for Claude on every scan."""
+    lines = sorted({f"- {p['name'].strip()}" + (f" ({p['botanical_name'].strip()})" if (p.get("botanical_name") or "").strip()
+                    else "") for p in stock or [] if (p.get("name") or "").strip()}, key=str.lower)
+    if not lines:
+        return STOCK_NONE
+    return STOCK_HEAD + "\n" + "\n".join(lines[:MAX_STOCK_NAMES])
+
+
+async def identify_plant(image: bytes, categories: list[str] | None = None, stock: list[dict] | None = None) -> dict:
+    """What the photo shows; for a plant or nursery product, its name and category, and which of the shop's own
+    products (`stock`: dicts with name and botanical_name) it is.
 
     kind is "plant", "nursery_product", "bill", "other", or "unknown" when Claude gave no usable answer.
-    The shop's products are not sent (they cost tokens on every call); the route matches the names Claude gives.
+    Claude cannot be made fully repeatable (Sonnet 5.5 takes no temperature), so it chooses from the shop's own
+    product list instead of naming freely: the same plant then comes back as the same product. The route checks
+    that what it chose is really one of the products.
     """
     categories = categories or []
     category_text = ", ".join(categories) if categories else "none"
     prompt = f"The nursery's product categories are: {category_text}."
     try:
-        data = await _ask("plant", SYSTEM_PLANT, prompt, [image], PlantId, EFFORT_PLANT, 2000)
+        data = await _ask("plant", SYSTEM_PLANT, prompt, [image], PlantId, EFFORT_PLANT, 2000,
+                          context=stock_context(stock))
     except Truncated:
         data = None
     if data is None:
         return {"kind": "unknown", "reason": "no usable answer", "plant_name": "", "scientific_name": "",
                 "confidence": 0, "confidence_label": "Low", "alternatives": [], "matched_catalog_name": "",
-                "suggested_category": ""}
+                "suggested_category": "", "stock_match": "", "stock_alternatives": []}
     category_by_lower = {c.lower(): c for c in categories}
     conf = max(0, min(100, data.confidence))
     label = "High" if conf >= 80 else ("Medium" if conf >= 50 else "Low")
@@ -438,6 +472,8 @@ async def identify_plant(image: bytes, categories: list[str] | None = None) -> d
         "alternatives": [a.strip() for a in data.alternatives[:3] if a.strip()],
         "matched_catalog_name": "",  # the route fills in the matched product's name (kept for older apps)
         "suggested_category": category_by_lower.get(data.suggested_category.strip().lower(), ""),
+        "stock_match": data.stock_match.strip(),
+        "stock_alternatives": [a.strip() for a in data.stock_alternatives[:3] if a.strip()],
     }
 
 

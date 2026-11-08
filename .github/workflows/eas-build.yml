@@ -1,0 +1,89 @@
+# App builds (EAS Build) are started from here only, by hand (Actions > App build > Run workflow), and only after the
+# owner's browser go for that build. The app checks run first. The job runs in the GitHub Environment of the
+# profile (production: a required reviewer) and needs the secret EXPO_TOKEN there (expo.dev > Account settings >
+# Access tokens). It waits for the build and writes the download link (an APK for staging) in the run's summary.
+# The build reads the rest from EAS: eas.json's profile, and the EAS environment variables of that profile
+# (GOOGLE_SERVICES_JSON for notifications, EXPO_PUBLIC_SENTRY_DSN, the production backend address).
+name: App build
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS build profile (staging = Hara Hisaab QA APK)"
+        type: choice
+        options: [staging, production, prod-apk]
+        required: true
+        default: staging
+      platform:
+        description: "Platform (iOS after the Apple account, decision D17)"
+        type: choice
+        options: [android]
+        required: true
+        default: android
+      message:
+        description: "What this build is for (shown in the EAS dashboard)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eas-build-${{ inputs.profile }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150  # the free EAS plan can queue a build for a while
+    environment: ${{ inputs.profile == 'staging' && 'staging' || 'production' }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: "22"
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - run: yarn install --frozen-lockfile --non-interactive
+      - name: eas build
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          PROFILE: ${{ inputs.profile }}
+          PLATFORM: ${{ inputs.platform }}
+          MESSAGE: ${{ inputs.message }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN is missing in this GitHub Environment (expo.dev > Account settings > Access tokens)"
+            exit 1
+          fi
+          npx --yes eas-cli@25.0.0 build --profile "$PROFILE" --platform "$PLATFORM" --message "$MESSAGE" \
+            --non-interactive --wait --json > build.json
+      - name: Download link in the run summary
+        if: always()
+        run: |
+          [ -s build.json ] || { echo "No build answer (see the eas build step)." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          node -e '
+            const fs = require("fs");
+            const app = JSON.parse(fs.readFileSync("app.json", "utf8")).expo;
+            let builds;
+            try { builds = JSON.parse(fs.readFileSync("build.json", "utf8")); } catch { builds = []; }
+            const lines = ["## App build", ""];
+            for (const b of [].concat(builds)) {
+              const page = `https://expo.dev/accounts/${app.owner}/projects/${app.slug}/builds/${b.id}`;
+              const file = (b.artifacts && (b.artifacts.buildUrl || b.artifacts.applicationArchiveUrl)) || "";
+              lines.push(`- **${b.platform} ${b.appVersion ?? app.version} (${b.appBuildVersion ?? "?"})**: ${b.status}`);
+              lines.push(`  - Build page: ${page}`);
+              if (file) lines.push(`  - Download: ${file}`);
+            }
+            if (lines.length === 2) lines.push("The build answer could not be read: see the eas build step and expo.dev.");
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+            console.log(lines.join("\n"));
+          '

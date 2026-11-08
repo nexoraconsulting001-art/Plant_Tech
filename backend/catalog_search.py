@@ -77,10 +77,11 @@ async def search_products(db, products: list[dict], query: str, lib: dict | None
 
 
 async def find_products(db, business_id: str, query: str, limit: int = LIMIT, where: dict | None = None,
-                        lib: dict | None = None) -> list[dict]:
+                        lib: dict | None = None, whole: bool = False) -> list[dict]:
     """The shop's best `limit` products for what was typed. `where` adds filters (category, low stock, ids).
     Pass a dict as `lib` to get the library entries of the products found (for products.views, so it does not
-    read them again)."""
+    read them again). `whole`: only products with a name that is exactly the query (in any of its forms), for a
+    complete name such as Claude's ("Pot" must not find Pothos), not something still being typed."""
     qk, qp = query_forms(query)
     if not qk:
         return []
@@ -98,9 +99,10 @@ async def find_products(db, business_id: str, query: str, limit: int = LIMIT, wh
             found.setdefault(p["id"], p)
 
     await take(exact_keys(qk, qp))
-    await take([Regex("^" + p) for p in prefixes(qk, qp, own=True)])
-    if len(found) < limit:
-        await take([Regex("^" + p) for p in prefixes(qk, qp, own=False)])
+    if not whole:
+        await take([Regex("^" + p) for p in prefixes(qk, qp, own=True)])
+        if len(found) < limit:
+            await take([Regex("^" + p) for p in prefixes(qk, qp, own=False)])
     candidates = list(found.values())
     entries = await library_images(db, candidates)
     if lib is not None:

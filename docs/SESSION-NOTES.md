@@ -5,6 +5,10 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
 branch map are also in `CLAUDE.md` at the repo root.
 
 ## Start here (8 Nov 2026)
+- **Afternoon, 8 Nov:** plant detection made consistent and tied to the shop's stock, an "App build" button in
+  GitHub Actions, a fix for reloaded web screens, and a full local browser test (sections "Plant detection",
+  "Browser test before the QA build", "App build button", "Firebase file for notifications" below). Pushed to
+  `prod-ready` and into `staging` for QA; the QA app build waits for the owner's EXPO_TOKEN in GitHub.
 - **Branch:** work on `prod-ready`. On 8 Nov the code review's fixes went in (776f980, see "Code review fixes"
   below), the owner connected GitHub, and `prod-ready` was pushed and fast-forwarded into `staging` (the owner
   asked for the QA update: "get the app back to QA updated with all fixes").
@@ -136,6 +140,69 @@ bills can be corrected for 7 days; decimals by product unit, never for plants.
 - 163318b review fixes; app is now 1.2.0 (versionCode 3).
 - Checked in the local browser on 2 Nov: 40 pcs typed, below-stock warnings and "Bill anyway", two UPI IDs and the QR picker, WhatsApp auto-open, Correct bill (INV-0424 → INV-0425), give-back amount, Notifications screen.
 - Not checked yet: a phone (push needs Firebase + a 1.2.0 build), the employee view in the browser, Hindi on the new screens.
+
+## Plant detection: consistent, and from the shop's own stock (8 Nov 2026)
+Owner: "sometimes the model misbehaves while detection, make it constant; if the same exists in inventory it shall
+be pulled or at least shown in recommended". Claude Sonnet 5.5 takes no `temperature` (a non-default value is a
+400), so consistency comes from the request instead:
+- **Claude chooses from the shop's stock:** each plant scan sends the shop's product names (sorted, botanical name
+  in brackets; at most `MAX_STOCK_NAMES` 600) as a second system block after the fixed instructions, with the cache
+  mark at its end (instructions + list are past the cache minimum, so a shop's scans within 5 minutes read it from
+  cache). The answer has `stock_match` (a name copied from the list, or "") and `stock_alternatives` (up to 3).
+- **Checked:** `routers/ai.py` uses `stock_match` only when it is really one of the shop's products (name_key,
+  a copied bracket allowed); a made-up name is ignored and plain name matching (best_product) applies.
+- **Other names:** Claude's names also go through the shop's search (catalog_search.find_products with
+  `whole=True`: whole names only, in English, Hindi, Hinglish or a library alias), so "Gulab" recommends Rose but
+  "Pot" does not recommend Pothos (typing in a search box still finds by the start of a name).
+- **Answer:** `matched_product`, `recommended_products` (up to 4: Claude's alternatives, close names, search
+  results; with a match they are the "not this one?" choices), and for older apps `similar_products` (only when
+  nothing matched) and `matched_catalog_name`.
+- **Same photo, same answer:** answers are remembered per shop by the photo's sha256 for `AI_PHOTO_CACHE_HOURS`
+  (24; 0 = off; tests run with 0) in `ai_photo_answers` (TTL, migration 0602). A remembered answer uses no scan.
+  Answers Claude could not give are not remembered.
+- **App:** the scan result shows "Not this one? Other matches in your stock"; the not-found screen lists them
+  under "Already in your products?"; Add product asks "This may be X, which you already have: Open X / Add as new"
+  before making a second product. Hindi for every new text.
+- **Cost:** about 1,500 more input tokens per scan for a shop with ~250 products (about $0.003 uncached, $0.0003
+  from cache, at Sonnet 5.5's $2 / $0.20 per million).
+- **Not done yet:** a consistency eval (20-30 of the owner's plant photos, 3 runs each, before and after). It needs
+  the photos.
+
+## Browser test before the QA build (8 Nov 2026)
+Against a local server with exactly this code (backend/tests/devserver.py on a real MongoDB replica set via
+`DEV_MONGO_URL`, fake Claude from /tmp/hara-hisaab-dev/fake_ai.json) and the web app, with Playwright (logins only
+against the local API, as the rules say). Passed:
+- Owner: Claude's pick from the stock list opens with "Not this one? Other matches in your stock"; tapping another
+  swaps them; the same photo again gets the remembered answer even when Claude would now say otherwise; "Gulab"
+  shows Rose under "Already in your products?"; a name Claude made up ("Golden Pothos XL") is ignored and the
+  botanical name finds Money Plant; cart, Cash, bill INV-0414; Add product by photo asks "This may be Rose, which
+  you already have: Open Rose / Add as new" and opens Rose; a botanical name match (Sansevieria) opens Snake Plant.
+- Hindi: the scan result screen fully in Hindi (new heading included), no English left, no cut-off text.
+- Employee (sell + customers only): no cost or profit, no "Add stock" on the scan result, own bill made, every tab
+  opens without errors. Owner screens (orders, products, customers, more, reports, supplier bill, staff, library,
+  notifications, shop) open without errors.
+- Found and fixed on the way: (1) Claude's names went through the type-ahead search, so "Pot" recommended Pothos
+  (test_identify_matches_whole_words_only caught it): `whole=True` above. (2) In the web version, reloading a
+  screen (e.g. Sales reports) showed "Please log in": the screen asked the server before the saved login was read
+  back. Requests now wait for that read (api.ts `waitForLogin`, started in auth.tsx as the app loads; Node test
+  added). The phone app always starts on the screen that waits for the login, so phones were not affected.
+  (3) The local server could not run on in-memory Mongo with the newest PyMongo (aggregate, bulk `sort`): six
+  `aggregate` calls now go through `rollups.aggregate` (both drivers), and devserver.py takes `DEV_MONGO_URL` for a
+  real replica set (a new `hh_dev_<time>` database each start).
+- Not covered by a browser: the camera itself, push notifications, and the real Claude (the QA app is for that).
+
+## Firebase file for notifications (8 Nov 2026)
+The owner made the Firebase project `hara-hisab` and downloaded google-services.json with all three Android apps
+(com.planteck.nurserypos, .qa and .dev). It is not in git (frontend/.gitignore): the owner adds it in EAS as the
+file variable GOOGLE_SERVICES_JSON (Sensitive; environments preview and production), as in docs/PUSH-SETUP.md
+step 4, and the FCM V1 service-account key per app in Expo credentials (step 5). An older download covers only the
+production and .qa apps: use the one with all three.
+
+## App build button (8 Nov 2026)
+`.github/workflows/eas-build.yml` (Actions > App build > Run workflow): profile staging / production / prod-apk,
+Android; the full CI runs first; the job runs in the GitHub Environment of the profile and needs the secret
+`EXPO_TOKEN` there (expo.dev > Account settings > Access tokens). It waits for EAS and puts the build page and
+download link in the run summary. Still only after the owner's go for that build.
 
 ## Code review fixes (8 Nov 2026, `prod-ready` 776f980)
 A code review of everything production would get (`main...prod-ready`, 97 commits, ~31k lines of code) found 11

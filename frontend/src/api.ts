@@ -33,6 +33,17 @@ export function setApiToken(t: string | null) {
   token = t;
 }
 
+// The saved login being read back as the app loads (auth.tsx). Requests wait for it, so a screen that asks the server
+// first (a web page reloaded on one of its screens) sends the token instead of being refused with "Please log in".
+let loginRead: Promise<void> | null = null;
+export function waitForLogin(reading: Promise<unknown>) {
+  const gate = reading.then(() => {}, () => {});
+  loginRead = gate;
+  gate.then(() => {
+    if (loginRead === gate) loginRead = null;
+  });
+}
+
 export function setOnUnauthorized(fn: (() => void) | null) {
   onUnauthorized = fn;
 }
@@ -99,6 +110,7 @@ async function request(method: string, path: string, body?: unknown, opts: Reque
 }
 
 async function requestOnce(method: string, path: string, body?: unknown, opts: RequestOptions = {}) {
+  if (loginRead) await loginRead;
   const headers: Record<string, string> = { ...opts.headers };
   const sent = token; // a reply to a request sent before the saved login came back must not log out
   if (sent) headers.Authorization = `Bearer ${sent}`;

@@ -666,3 +666,20 @@ A code review of everything production would get (`main...prod-ready`) found 11 
 - Checks: backend 450 passed, 2 skipped (12 new), ruff clean; app tsc, eslint 0 errors, i18n 850 texts, Node 18/18.
 - Still open from 3 Nov: bills past the in-flight limit by a small margin, a pool wait answered apart from a slow
   query, and the k6 capacity test on staging-sized hardware.
+
+## Status update (8 Nov 2026, afternoon)
+- Plant detection made consistent (owner's ask): Claude now chooses from the shop's own product list sent with the
+  photo, its choice is used only when it is really one of the products, Claude's names also find products by their
+  Hindi, Hinglish and catalogue names (whole names only), and the same photo gets the same answer for 24 hours
+  without using a scan (`ai_photo_answers`, migration 0602). The app shows the other close products in stock, and
+  Add product asks before making a second copy of one. Details: SESSION-NOTES, "Plant detection".
+- WP-11 CI/CD: an "App build" button in GitHub Actions (`.github/workflows/eas-build.yml`) runs the full CI, then
+  the EAS build of the chosen profile and puts the download link in the run summary. Needs the owner's EXPO_TOKEN
+  in the GitHub Environment; still only after the owner's go for that build.
+- Web version: a reloaded screen waited for nothing and showed "Please log in"; requests now wait for the saved
+  login. Phones were not affected.
+- Full local browser test passed (owner, employee, Hindi, scan flows): SESSION-NOTES, "Browser test before the QA
+  build".
+- Checks: backend 456 passed, 2 skipped, ruff clean; app tsc, eslint 0 errors, i18n 854 texts, Node 19/19.
+- Owner steps before notifications work on the QA app: google-services.json (received, all three apps) into EAS,
+  FCM V1 key in Expo credentials, PUSH_ENABLED=1 on staging.

@@ -26,6 +26,7 @@ os.environ.update(
     AUTO_MIGRATE="1", STORAGE_BACKEND="local", LOCAL_STORAGE_DIR=tempfile.mkdtemp(),
     JWT_SECRET="test-secret-0123456789-abcdefghijklmnop", ADMIN_PHONES="9000000001", AI_DAILY_LIMIT="5",
     PUBLIC_BASE_URL="https://pos.test", AI_ENRICH_NAMES="0", LOG_FORMAT="console",
+    AI_PHOTO_CACHE_HOURS="0",  # tests send the same photo with different fake answers; test_ai turns it on
 )
 for name in ("GOOGLE_CLIENT_IDS", "REDIS_URL", "SENTRY_DSN"):
     os.environ.pop(name, None)
@@ -94,7 +95,8 @@ def client(mongo):
     db_module.state.db = None
 
 PLANT = {"kind": "plant", "reason": "a potted plant", "plant_name": "Money Plant", "scientific_name": "Epipremnum aureum", "confidence": 91,
-         "alternatives": ["Pothos"], "matched_catalog_name": "Money Plant", "suggested_category": "indoor plants"}
+         "alternatives": ["Pothos"], "matched_catalog_name": "Money Plant", "suggested_category": "indoor plants",
+         "stock_match": "", "stock_alternatives": []}
 INVOICE = {"is_bill": True, "reason": "a printed invoice", "same_supplier": True, "same_bill": True,
            "pages": [{"page": 1, "is_bill": True, "supplier": "Green Farms", "supplier_gstin": "", "invoice_number": "GF-12"}],
            "supplier": "Green Farms", "supplier_phone": "98111 00000", "supplier_address": "Sohna Road, Gurugram",
@@ -131,7 +133,10 @@ def claude():
     def handler(req):
         body = json.loads(req.content)
         calls.append((dict(req.headers), body))
-        reply = {ai_client.SYSTEM_INVOICE: calls.invoice, ai_client.SYSTEM_NAMES: calls.names}.get(body["system"], calls.plant)
+        system = body["system"]  # a string, or blocks (the instructions, then a plant scan's stock list)
+        text = system if isinstance(system, str) else "".join(b["text"] for b in system)
+        reply = (calls.invoice if text.startswith(ai_client.SYSTEM_INVOICE)
+                 else calls.names if text.startswith(ai_client.SYSTEM_NAMES) else calls.plant)
         return httpx2.Response(200, json=claude_message(json.dumps(reply)))
 
     ai_client._client = fake_claude_client(handler)
