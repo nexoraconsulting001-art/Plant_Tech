@@ -9,6 +9,12 @@ branch map are also in `CLAUDE.md` at the repo root.
   copied into it exactly (pilot shops and the demo shop; "copy demo shop too"), the pilots move to the production
   app, builds come from `main`; sslip.io for now. The plan and the owner's steps: `docs/PROD-RELEASE.md`. Waiting
   for the owner's setup (A) and "release". Section "Production release tools" below.
+- **9 Nov, setup A1 done on the VM:** production's `deploy/.env` made with `prod-env-from-qa.sh --keep-own-keys`
+  (ENV=production, nurserypos / 8120, STORAGE_PREFIX=nurserypos, the sslip.io address, a new JWT_SECRET,
+  ALLOW_NO_ROLLBACK=1). Production has its own Claude key and its own R2 bucket `hara-hisaab-prod` with a token
+  for that bucket only; both checked on the VM (write/remove a test file, list models). No R2_PUBLIC_BUCKET on
+  either side. The first try had stopped: QA's `.env` has no `ENV=` line (compose default staging); fixed in
+  58933a6. Still open: A2 (GitHub environments, EXPO_TOKEN), A3 (EAS production variables), then "release".
 - **Afternoon, 8 Nov:** plant detection made consistent and tied to the shop's stock, an "App build" button in
   GitHub Actions, a fix for reloaded web screens, and a full local browser test (sections "Plant detection",
   "Browser test before the QA build", "App build button", "Firebase file for notifications" below). Pushed to
