@@ -12,8 +12,11 @@ production settings, QA copied in, logins and photos checked on both sides). Tim
 
 1. **Production settings on the VM.** Log in to the VM (as for the Claude key) and run:
    ```bash
-   cd ~/Plant_Tech-staging && git fetch -q origin prod-ready && git show origin/prod-ready:deploy/prod-env-from-qa.sh > /tmp/prod-env-from-qa.sh && bash /tmp/prod-env-from-qa.sh
+   cd ~/Plant_Tech-staging && git fetch -q origin prod-ready && git show origin/prod-ready:deploy/prod-env-from-qa.sh > /tmp/prod-env-from-qa.sh && bash /tmp/prod-env-from-qa.sh --keep-own-keys
    ```
+   (`--keep-own-keys`: production's own Claude and R2 keys already in its file are kept instead of QA's. On 9 Nov
+   the first try stopped, because QA's file has no `ENV=` line, which compose reads as staging; both scripts now
+   read it that way.)
    It writes production's `~/Plant_Tech/deploy/.env` from QA's: the same Claude and photo-storage keys and
    limits, and production's own: `ENV=production`, a new login secret, its own photo folder (`nurserypos`, QA's is
    `nurserypos-staging`), its address, its name and port as today, and `ALLOW_NO_ROLLBACK=1` for the first deploy.

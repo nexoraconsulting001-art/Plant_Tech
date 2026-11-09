@@ -56,7 +56,8 @@ for d in "$QA_DIR" "$PROD_DIR"; do
   [ -f "$d/deploy/.env" ] || die "$d/deploy/.env not found (QA_DIR / PROD_DIR)"
 done
 [ "$(cd "$QA_DIR" && pwd -P)" != "$(cd "$PROD_DIR" && pwd -P)" ] || die "QA_DIR and PROD_DIR are the same folder"
-[ "$(env_get "$QA_DIR" ENV)" = staging ] || die "QA's deploy/.env must say ENV=staging (got '$(env_get "$QA_DIR" ENV)')"
+QA_IS=$(env_get "$QA_DIR" ENV); QA_IS=${QA_IS:-$(env_get "$QA_DIR" APP_ENV)}; QA_IS=${QA_IS:-staging}  # none = staging
+[ "$QA_IS" = staging ] || die "QA's deploy/.env says ENV=$QA_IS, not staging"
 [ "$(env_get "$PROD_DIR" ENV)" = production ] || die "production's deploy/.env must say ENV=production (got '$(env_get "$PROD_DIR" ENV)')"
 for d in "$QA_DIR" "$PROD_DIR"; do
   url=$(env_get "$d" MONGO_URL)

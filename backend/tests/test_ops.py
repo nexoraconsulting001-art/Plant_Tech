@@ -391,7 +391,8 @@ def test_production_settings_are_made_from_qas(tmp_path):
         pytest.skip("needs bash")
     qa, prod = tmp_path / "qa.env", tmp_path / "prod" / ".env"
     prod.parent.mkdir()
-    qa.write_text("ENV=staging\nPROJECT_NAME=nurserypos-staging\nHOST_PORT=8130\nSTORAGE_PREFIX=nurserypos-staging\n"
+    # no ENV line, as on the VM (compose.yaml defaults it to staging)
+    qa.write_text("PROJECT_NAME=nurserypos-staging\nHOST_PORT=8130\nSTORAGE_PREFIX=nurserypos-staging\n"
                   "CORS_ORIGINS=*\nJWT_SECRET=qa-secret-qa-secret-qa-secret-qa-secret\nHEARTBEAT_URL=https://hb/qa\n"
                   "BACKUP_RCLONE_REMOTE=r2:backups/staging\nANTHROPIC_API_KEY=sk-qa\nSTORAGE_BACKEND=r2\n"
                   "R2_ACCOUNT_ID=acct\nR2_ACCESS_KEY_ID=key\nR2_SECRET_ACCESS_KEY=secret\nR2_BUCKET=photos\n"
@@ -417,5 +418,24 @@ def test_production_settings_are_made_from_qas(tmp_path):
     again = subprocess.run([BASH, str(script)], env=env, capture_output=True, text=True, timeout=30)
     assert again.returncode == 1 and "already says ENV=production" in again.stderr
     qa.write_text(qa.read_text().replace("STORAGE_PREFIX=nurserypos-staging\n", ""), newline="\n")
+    # production's own Claude key and bucket, already in its file, are kept with --keep-own-keys
+    with prod.open("a", newline="\n") as f:
+        f.write("ANTHROPIC_API_KEY=sk-prod\nR2_BUCKET=hara-hisaab-prod\nR2_ACCESS_KEY_ID=pk\nR2_SECRET_ACCESS_KEY=ps\n"
+                "R2_PUBLIC_BUCKET=\n")
+    r = subprocess.run([BASH, str(script), "--again", "--keep-own-keys"], env=env, capture_output=True, text=True,
+                       timeout=30)
+    assert r.returncode == 0, r.stdout + r.stderr
+    made = dict(line.split("=", 1) for line in prod.read_text().splitlines() if "=" in line and not line.startswith("#"))
+    assert (made["ANTHROPIC_API_KEY"], made["R2_BUCKET"], made["R2_ACCESS_KEY_ID"], made["R2_SECRET_ACCESS_KEY"]) == \
+        ("sk-prod", "hara-hisaab-prod", "pk", "ps")
+    assert made["R2_ACCOUNT_ID"] == "acct" and made["ENV"] == "production"  # not in production's file: QA's
+    assert prod.read_text().count("ANTHROPIC_API_KEY=") == 1 and "sk-prod" not in r.stdout
+    assert "kept from production's previous file: ANTHROPIC_API_KEY R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET" \
+        in r.stdout  # R2_ACCOUNT_ID was in production's file (made from QA's earlier); empty R2_PUBLIC_BUCKET is not kept
+    not_qa = tmp_path / "not-qa.env"
+    not_qa.write_text("ENV=production\n", newline="\n")
+    r = subprocess.run([BASH, str(script), "--again"], env={**env, "QA_ENV": str(not_qa)}, capture_output=True,
+                       text=True, timeout=30)
+    assert r.returncode == 1 and "not staging" in r.stderr
     r = subprocess.run([BASH, str(script), "--again"], env=env, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and "STORAGE_PREFIX=nurserypos-prod" in prod.read_text()  # QA keeps the default folder
