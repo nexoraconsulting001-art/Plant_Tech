@@ -1,7 +1,10 @@
 // Bottom sheet (slides up over the screen) and the small pieces used inside it:
 // option rows with a tick, a select field that opens a sheet, and filter chips.
+// The sheet rises with the keyboard on Android too (the keyboard library's KeyboardAvoidingView, which works inside a
+// Modal; React Native's own did nothing there, so a sheet's text field was under the keyboard, QA 10 Nov 2026).
 import React from "react";
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 
@@ -15,7 +18,7 @@ export function Sheet({ visible, onClose, title, children, footer, testID }: {
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1, justifyContent: "flex-end" }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: "flex-end" }}>
         <Pressable accessibilityLabel={t("Close")} onPress={onClose} style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(16,32,26,0.45)" }]} />
         <View testID={testID} style={{ width: "100%", maxWidth: 480, alignSelf: "center", maxHeight: "90%", backgroundColor: colors.surface,
           borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingBottom: insets.bottom + spacing.lg }}>

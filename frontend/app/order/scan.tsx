@@ -1,12 +1,14 @@
 // New order: take a photo (AI finds the product) or type its name.
-// Found → pick how many → add. Not in stock → save it as a new product, or sell it on this bill only.
+// Found → add one (adding again adds one more; quantity and price are changed on the order screen, owner 10 Nov
+// 2026). Not in stock → save it as a new product, or sell it on this bill only.
 // More than the stock count of a product: the owner may, after a warning (it stays a normal line of that
 // product with its GST, and the stock goes below zero); an employee may not.
-// Photos of anything a nursery doesn't sell (or of a bill) are refused with an explanation.
+// Photos of anything a nursery doesn't sell are refused with an explanation; a photo of a bill or a written list can be
+// read as the customer's order (paper.tsx) or, for those who add stock, opened as a supplier bill.
 // Search by name: sent 250 ms after the last key, with the last results kept on screen meanwhile; a search
 // overtaken by a newer one is cancelled (React Query's signal).
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, TextInput, View } from "react-native";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { Redirect, useRouter } from "expo-router";
@@ -20,16 +22,17 @@ import { useCart } from "@/src/cart-context";
 import { CorrectionBanner, DiscardOrder, OrderCustomerBar } from "@/src/components/order-customer";
 import { CategoryPicker } from "@/src/components/category-picker";
 import { NetStatus } from "@/src/components/net-status";
-import { choose, confirm, notice } from "@/src/confirm";
+import { choose, confirm } from "@/src/confirm";
 import { useToast } from "@/src/components/toast";
-import { Badge, BottomBar, Button, Field, Header, Icon, Screen, SearchBox, Segmented, Stepper, T, Thumb } from "@/src/components/ui";
+import { Badge, BottomBar, Button, Field, Header, Icon, IconName, Screen, SearchBox, Segmented, Stepper, T, Thumb } from "@/src/components/ui";
 import { formatCurrency, formatQty, formatQtyUnit } from "@/src/format";
 import { CaptureResult, pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
 import { LONG_EDGE } from "@/src/image-tools";
+import { setPendingPhoto } from "@/src/pending-photo";
 import { askOwner, shortWarning } from "@/src/stock";
 import { colors, radius, spacing, touch } from "@/src/theme";
 import type { Product } from "@/src/types";
-import { MAX_QTY, roundQty, unitShort, wholeUnit } from "@/src/units";
+import { roundQty, unitShort, wholeUnit } from "@/src/units";
 
 const SEARCH_AFTER_MS = 250;
 
@@ -74,16 +77,23 @@ export default function OrderScan() {
       }
     } catch (e: any) {
       restart();
-      await refused(e, source);
+      await refused(e, source, out.result);
     }
   }
 
   // The photo was not of something to sell: say why, and offer the useful next step.
-  async function refused(e: any, source: "camera" | "gallery") {
+  async function refused(e: any, source: "camera" | "gallery", photoOf: CaptureResult) {
     const code = e instanceof ApiError ? e.code : "";
     if (code === "looks_like_bill") {
-      if (!can("stock")) await notice(t("Supplier bill detected"), e.message);
-      else if (await confirm(t("Supplier bill detected"), e.message, t("Open supplier bill"))) router.push("/more/supplier-bill");
+      // a customer's order on paper, or a supplier's bill (only for those who add stock)
+      const pick = can("stock")
+        ? await choose(t("This looks like a bill"), t("Read it as a customer's order, or add stock from a supplier's bill."), t("Read as order"),
+          t("Open supplier bill"))
+        : (await confirm(t("This looks like a bill"), t("Read it as a customer's order?"), t("Read as order"))) ? "yes" : null;
+      if (pick === "yes") {
+        setPendingPhoto(photoOf);
+        router.push("/order/paper");
+      } else if (pick === "no") router.push("/more/supplier-bill");
       return;
     }
     if (code === "not_nursery_item" || code === "not_identified") {
@@ -114,30 +124,34 @@ export default function OrderScan() {
     const pickOther = (p: Product) =>
       setStage({ kind: "found", product: p, others: [stage.product, ...stage.others.filter((o) => o.id !== p.id)] });
     return <Found key={stage.product.id} product={stage.product} confidence={stage.confidence} others={stage.others}
-      photoUri={photo?.uri} onBack={restart} onAdded={added} onPick={pickOther} />;
+      photoUri={photo?.uri} onBack={restart} onSearch={() => { restart(); setFocusSearch((n) => n + 1); }} onAdded={added} onPick={pickOther} />;
   }
   if (stage.kind === "new") {
     return <NotInStock initial={stage} photo={photo} onBack={restart} onAdded={added}
       onPick={(p) => setStage({ kind: "found", product: p, others: [] })} />;
   }
-  return <Start checking={stage.kind === "checking"} photoUri={photo?.uri} onCapture={capture} focusSearch={focusSearch}
+  return <Start checking={stage.kind === "checking"} photoUri={photo?.uri} onCapture={capture} focusSearch={focusSearch} onSearchOpened={() => setFocusSearch(0)}
     onPick={(p) => setStage({ kind: "found", product: p, others: [] })}
     onNew={(name) => { setPhoto(null); setStage({ kind: "new", name, botanical: "", categoryId: null, similar: [] }); }} />;
 }
 
-function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch }: {
+function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch, onSearchOpened }: {
   checking: boolean; photoUri?: string; onCapture: (s: "camera" | "gallery") => void; onPick: (p: Product) => void; onNew: (name: string) => void;
-  focusSearch: number;
+  focusSearch: number; onSearchOpened: () => void; // focusSearch > 0: open the search (asked once; onSearchOpened sets it back to 0)
 }) {
   const { t } = useTranslation();
   const router = useRouter();
   const [q, setQ] = useState("");
+  // Searching by name: the camera panel folds away and the box sits at the top, the results right under it, so
+  // what is typed is never under the keyboard (owner, 10 Nov 2026).
+  const [searching, setSearching] = useState(false);
   const searchRef = useRef<TextInput>(null);
+  if (focusSearch > 0 && !searching) setSearching(true);
   useEffect(() => {
     if (!focusSearch) return;
-    const id = setTimeout(() => searchRef.current?.focus(), 400); // after the alert sheet has closed
+    const id = setTimeout(() => { searchRef.current?.focus(); onSearchOpened(); }, 400); // after the alert sheet has closed
     return () => clearTimeout(id);
-  }, [focusSearch]);
+  }, [focusSearch]); // eslint-disable-line react-hooks/exhaustive-deps
   const query = q.trim();
   const [term, setTerm] = useState(""); // what was searched: the query once typing pauses
   useEffect(() => {
@@ -152,20 +166,40 @@ function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch }: {
   });
   const shown = query.length >= 2 ? results.data ?? [] : [];
   const settled = query.length >= 2 && query === term && !!results.data && !results.isPlaceholderData; // the results are for what is typed
+  const stopSearching = () => {
+    onSearchOpened();
+    setQ("");
+    setSearching(false);
+    Keyboard.dismiss();
+  };
 
   return (
     <Screen bg={colors.surface}>
       <Header title={t("Add items")} close onBack={() => router.back()} testID="scan-close" right={<DiscardOrder />} />
-      <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.md }}>
-        <NetStatus />
-        <OrderCustomerBar />
-        <CorrectionBanner />
-      </View>
-      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: spacing.lg }}>
-        {!query && (
+      {!searching && (
+        <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.md }}>
+          <NetStatus />
+          <OrderCustomerBar />
+          <CorrectionBanner />
+        </View>
+      )}
+      {searching && (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md }}>
+          <Pressable onPress={stopSearching} accessibilityRole="button" accessibilityLabel={t("Back to scan")} testID="scan-search-close"
+            hitSlop={8} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+            <Icon name="arrow-left" size={26} color={colors.ink} />
+          </Pressable>
+          <View style={{ flex: 1 }}>
+            <SearchBox ref={searchRef} value={q} onChangeText={setQ} placeholder={t("Search by product name")} autoFocus testID="scan-search" />
+          </View>
+        </View>
+      )}
+      <KeyboardAwareScrollView keyboardShouldPersistTaps="handled" bottomOffset={24} contentContainerStyle={{ paddingBottom: spacing.lg }}>
+        {!searching && (
           <>
             <Pressable testID="scan-camera-panel" disabled={checking} onPress={() => onCapture("camera")}
-              style={{ marginHorizontal: spacing.lg, height: 300, borderRadius: 26, overflow: "hidden", backgroundColor: "#1C2B24",
+              accessibilityRole="button" accessibilityLabel={t("Tap to scan")}
+              style={{ marginHorizontal: spacing.lg, height: 280, borderRadius: 26, overflow: "hidden", backgroundColor: "#1C2B24",
                 alignItems: "center", justifyContent: "center" }}>
               {checking && photoUri ? (
                 <>
@@ -176,60 +210,76 @@ function Start({ checking, photoUri, onCapture, onPick, onNew, focusSearch }: {
                 </>
               ) : (
                 <>
-                  <View style={{ width: 190, height: 190, borderWidth: 4, borderColor: colors.white, borderRadius: 28, opacity: 0.85,
+                  <View style={{ width: 150, height: 150, borderWidth: 4, borderColor: colors.white, borderRadius: 28, opacity: 0.85,
                     alignItems: "center", justifyContent: "center" }}>
-                    <Icon name="leaf" size={64} color={colors.white} />
+                    <Icon name="camera" size={56} color={colors.white} />
                   </View>
-                  <T v="bodyLarge" color={colors.white} style={{ marginTop: spacing.lg }}>{t("Take a photo of the item")}</T>
+                  <T v="title" color={colors.white} style={{ marginTop: spacing.lg }}>{t("Tap to scan")}</T>
+                  <T v="small" color="#D5E9DB" style={{ marginTop: 2 }}>{t("Take a photo of the item")}</T>
                 </>
               )}
             </Pressable>
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 28, paddingTop: spacing.lg, paddingHorizontal: spacing.lg }}>
-              <Pressable testID="scan-gallery" accessibilityLabel={t("Pick from gallery")} disabled={checking} onPress={() => onCapture("gallery")}
-                style={{ width: 60, height: 60, borderRadius: 18, borderWidth: 2, borderColor: colors.lineStrong, alignItems: "center", justifyContent: "center" }}>
-                <Icon name="image-outline" size={28} color={colors.ink} />
-              </Pressable>
-              <Pressable testID="scan-take-photo" accessibilityLabel={t("Take photo")} disabled={checking} onPress={() => onCapture("camera")}
-                style={{ width: 88, height: 88, borderRadius: 44, backgroundColor: colors.blue, alignItems: "center", justifyContent: "center",
-                  borderWidth: 6, borderColor: colors.blueTint }}>
-                <Icon name="camera" size={40} color={colors.white} />
-              </Pressable>
-              <T v="bold" color={colors.blue} style={{ width: 60, fontSize: 14, textAlign: "center" }}>{t("Tap to scan")}</T>
+            <View style={{ flexDirection: "row", gap: spacing.md, paddingTop: spacing.lg, paddingHorizontal: spacing.lg }}>
+              <SideButton icon="image-outline" title={t("Upload photo")} disabled={checking} onPress={() => onCapture("gallery")} testID="scan-gallery" />
+              <SideButton icon="file-document-outline" title={t("Upload order details")} disabled={checking}
+                onPress={() => router.push("/order/paper")} testID="scan-paper" />
             </View>
+            <Pressable onPress={() => setSearching(true)} testID="scan-search-open" accessibilityRole="search"
+              style={{ marginHorizontal: spacing.lg, marginTop: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.sm,
+                minHeight: 52, paddingHorizontal: spacing.md, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.lineStrong }}>
+              <Icon name="magnify" size={22} color={colors.muted} />
+              <T v="body" color={colors.muted}>{t("Or search by product name")}</T>
+            </Pressable>
           </>
         )}
 
-        <View style={{ paddingHorizontal: spacing.lg, paddingTop: query ? 0 : 14, gap: spacing.md }}>
-          <SearchBox ref={searchRef} value={q} onChangeText={setQ} placeholder={t("Or search by product name")} testID="scan-search" />
-
-          {query.length >= 2 && !shown.length && !settled && !results.isError && <ActivityIndicator color={colors.green} style={{ marginTop: spacing.md }} />}
-          {shown.map((p) => (
-            <Pressable key={p.id} testID={`scan-result-${p.name}`} onPress={() => onPick(p)}
-              style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 72, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line }}>
-              <Thumb path={p.image_path} size={52} />
-              <View style={{ flex: 1 }}>
-                <T v="bold">{p.name}</T>
-                <T v="small" color={p.out_of_stock ? colors.red : colors.muted}>
-                  {p.out_of_stock ? t("Out of stock") : t("{{n}} in stock", { n: formatQtyUnit(p.stock, p.unit) })}
+        {searching && (
+          <View style={{ paddingHorizontal: spacing.lg, gap: spacing.md }}>
+            {query.length < 2 && <T v="small">{t("Type at least 2 letters of the name, in English or Hindi.")}</T>}
+            {query.length >= 2 && !shown.length && !settled && !results.isError && <ActivityIndicator color={colors.green} style={{ marginTop: spacing.md }} />}
+            {shown.map((p) => (
+              <Pressable key={p.id} testID={`scan-result-${p.name}`} onPress={() => { Keyboard.dismiss(); onPick(p); }}
+                style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 72, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line }}>
+                <Thumb path={p.image_path} size={52} />
+                <View style={{ flex: 1 }}>
+                  <T v="bold">{p.name}</T>
+                  <T v="small" color={p.out_of_stock ? colors.red : colors.muted}>
+                    {p.out_of_stock ? t("Out of stock") : t("{{n}} in stock", { n: formatQtyUnit(p.stock, p.unit) })}
+                  </T>
+                </View>
+                <T v="number">{formatCurrency(p.selling_price)}</T>
+              </Pressable>
+            ))}
+            {settled && (
+              <Pressable testID="scan-not-listed" onPress={() => { Keyboard.dismiss(); onNew(query); }}
+                style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 64, borderRadius: radius.lg, borderWidth: 2,
+                  borderStyle: "dashed", borderColor: colors.green }}>
+                <Icon name="plus-circle" size={30} color={colors.green} />
+                <T v="bold" color={colors.greenDark} style={{ flex: 1 }}>
+                  {shown.length ? t("Sell “{{q}}” as a new item", { q: query }) : t("“{{q}}” is not in your products", { q: query })}
                 </T>
-              </View>
-              <T v="number">{formatCurrency(p.selling_price)}</T>
-            </Pressable>
-          ))}
-          {settled && (
-            <Pressable testID="scan-not-listed" onPress={() => onNew(query)}
-              style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 64, borderRadius: radius.lg, borderWidth: 2,
-                borderStyle: "dashed", borderColor: colors.green }}>
-              <Icon name="plus-circle" size={30} color={colors.green} />
-              <T v="bold" color={colors.greenDark} style={{ flex: 1 }}>
-                {shown.length ? t("Sell “{{q}}” as a new item", { q: query }) : t("“{{q}}” is not in your products", { q: query })}
-              </T>
-            </Pressable>
-          )}
-        </View>
-      </ScrollView>
+              </Pressable>
+            )}
+          </View>
+        )}
+      </KeyboardAwareScrollView>
       <CartBar />
     </Screen>
+  );
+}
+
+// "Upload photo" / "Upload order details" under the camera panel: two equal buttons.
+function SideButton({ icon, title, onPress, disabled, testID }: {
+  icon: IconName; title: string; onPress: () => void; disabled?: boolean; testID: string;
+}) {
+  return (
+    <Pressable onPress={onPress} disabled={disabled} testID={testID} accessibilityRole="button"
+      style={({ pressed }) => ({ flex: 1, minHeight: 64, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm,
+        paddingHorizontal: spacing.sm, borderRadius: radius.lg, borderWidth: 1.5, borderColor: colors.green,
+        backgroundColor: pressed ? colors.greenTint : colors.surface, opacity: disabled ? 0.5 : 1 })}>
+      <Icon name={icon} size={24} color={colors.greenDark} />
+      <T v="bold" color={colors.greenDark} style={{ flexShrink: 1, textAlign: "center" }}>{title}</T>
+    </Pressable>
   );
 }
 
@@ -253,21 +303,20 @@ function CartBar() {
   );
 }
 
-function Found({ product: p, confidence, others, photoUri, onBack, onAdded, onPick }: {
-  product: Product; confidence?: string; others: Product[]; photoUri?: string; onBack: () => void;
+function Found({ product: p, confidence, others, photoUri, onBack, onSearch, onAdded, onPick }: {
+  product: Product; confidence?: string; others: Product[]; photoUri?: string; onBack: () => void; onSearch: () => void;
   onAdded: (next: "scan" | "cart") => void; onPick: (p: Product) => void;
 }) {
   const { t } = useTranslation();
   const router = useRouter();
   const cart = useCart();
-  const toast = useToast();
   const { can, isOwner } = useAuth();
   const inCart = cart.items.find((i) => i.product_id === p.id)?.quantity ?? 0;
   const back = cart.returning(p.id); // correcting a bill: what that bill took counts as back in stock
   const stock = roundQty(p.stock + back, false);
   const whole = wholeUnit(p.unit);
   const left = Math.max(0, roundQty(stock - inCart, false));
-  const [qty, setQty] = useState(() => (whole ? 1 : Math.min(1, left) || 1)); // 0.5 kg left: start at 0.5
+  const qty = whole ? 1 : Math.min(1, left) || 1; // one at a time; 0.5 kg left: 0.5
   const short = qty > left + 1e-9; // only the owner gets here with more than is left
   const blocked = !isOwner && left <= 0; // an employee can't sell what isn't in stock
   const conf = confidence === "High" ? { text: t("Strong match"), tone: "green" as const }
@@ -308,13 +357,6 @@ function Found({ product: p, confidence, others, photoUri, onBack, onAdded, onPi
           </View>
         </View>
 
-        {!blocked && (
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <T v="bodyLarge">{t("Quantity")}</T>
-            <Stepper value={qty} onChange={setQty} min={whole ? 1 : 0.001} max={isOwner ? MAX_QTY : left} decimals={!whole} unit={unitShort(p.unit)}
-              onLimit={isOwner ? undefined : () => toast.show(askOwner(p.name, stock, p.unit), "error")} testID="found-qty" />
-          </View>
-        )}
         {(blocked || short) && (
           <View testID="found-short" style={{ gap: spacing.md, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: blocked ? colors.redTint : colors.amberTint }}>
             <T v="bold" color={blocked ? colors.red : colors.amberInk}>{stock > 0 ? t("Not enough stock") : t("Out of stock")}</T>
@@ -349,13 +391,13 @@ function Found({ product: p, confidence, others, photoUri, onBack, onAdded, onPi
           </View>
         )}
 
-        <Pressable onPress={onBack} style={{ minHeight: 48, justifyContent: "center", alignItems: "center" }}>
+        <Pressable onPress={onSearch} testID="found-search" style={{ minHeight: 48, justifyContent: "center", alignItems: "center" }}>
           <T v="bold" color={colors.green}>{t("Not the right item? Search by name")}</T>
         </Pressable>
       </ScrollView>
       <BottomBar>
         {blocked ? (
-          <Button title={t("Search another item")} icon="magnify" variant="outline" onPress={onBack} testID="found-search-again" />
+          <Button title={t("Search another item")} icon="magnify" variant="outline" onPress={onSearch} testID="found-search-again" />
         ) : (
           <>
             <Button title={t("Add and scan next")} icon="camera" variant="outline" size="md" onPress={() => add("scan")} testID="found-add-next" />
@@ -466,7 +508,7 @@ function NotInStock({ initial, photo, onBack, onAdded, onPick }: {
         )}
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <T v="bodyLarge">{t("Quantity")}</T>
-          <Stepper value={qty} onChange={setQty} unit={unitShort("pcs")} testID="new-qty" />
+          <Stepper value={qty} onChange={setQty} testID="new-qty" />
         </View>
       </KeyboardAwareScrollView>
       <BottomBar>

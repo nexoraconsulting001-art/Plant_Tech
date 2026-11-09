@@ -2,6 +2,7 @@
 // one and shows as "To check" until the admin looks at it here.
 import { useMemo, useState } from "react";
 import { FlatList, Pressable, ScrollView, View } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Image } from "expo-image";
 import { Redirect } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -73,28 +74,32 @@ export default function AdminLibrary() {
           ))}
         </ScrollView>
       </View>
-      {q.isLoading ? <LoadingView /> : q.isError ? <ErrorView message={(q.error as Error).message} onRetry={q.refetch} /> : (
-        <FlatList
-          data={shown}
-          keyExtractor={(e) => e.id}
-          numColumns={2}
-          columnWrapperStyle={{ gap: spacing.md }}
-          contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.md }}
-          ListEmptyComponent={<EmptyState icon="image-multiple" title={t("Nothing here")} />}
-          renderItem={({ item: e }) => (
-            <Pressable onPress={() => setOpenId(e.id)} testID={`lib-${e.name}`}
-              style={({ pressed }) => ({ flex: 1, maxWidth: "50%", gap: 6, padding: spacing.sm, borderRadius: radius.lg, borderWidth: 1,
-                borderColor: e.image_status === "new" ? colors.amber : colors.line, backgroundColor: pressed ? colors.page : colors.surface })}>
-              <Picture path={e.image_path} size="100%" />
-              <View style={{ gap: 2, paddingHorizontal: 2 }}>
-                <T v="bold">{e.name}</T>
-                {!!e.name_hi && <T v="small">{e.name_hi}</T>}
-                <StatusBadge e={e} />
-              </View>
-            </Pressable>
-          )}
-        />
-      )}
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        {q.isLoading ? <LoadingView /> : q.isError ? <ErrorView message={(q.error as Error).message} onRetry={q.refetch} /> : (
+          <FlatList
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            data={shown}
+            keyExtractor={(e) => e.id}
+            numColumns={2}
+            columnWrapperStyle={{ gap: spacing.md }}
+            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.md }}
+            ListEmptyComponent={<EmptyState icon="image-multiple" title={t("Nothing here")} />}
+            renderItem={({ item: e }) => (
+              <Pressable onPress={() => setOpenId(e.id)} testID={`lib-${e.name}`}
+                style={({ pressed }) => ({ flex: 1, maxWidth: "50%", gap: 6, padding: spacing.sm, borderRadius: radius.lg, borderWidth: 1,
+                  borderColor: e.image_status === "new" ? colors.amber : colors.line, backgroundColor: pressed ? colors.page : colors.surface })}>
+                <Picture path={e.image_path} size="100%" />
+                <View style={{ gap: 2, paddingHorizontal: 2 }}>
+                  <T v="bold">{e.name}</T>
+                  {!!e.name_hi && <T v="small">{e.name_hi}</T>}
+                  <StatusBadge e={e} />
+                </View>
+              </Pressable>
+            )}
+          />
+        )}
+      </KeyboardAvoidingView>
       {open && <EntrySheet entry={open} onClose={() => setOpenId(null)} />}
     </Screen>
   );

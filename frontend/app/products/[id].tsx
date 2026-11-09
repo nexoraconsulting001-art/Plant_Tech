@@ -14,7 +14,7 @@ import { Badge, BottomBar, Button, Chip, ErrorView, Header, Icon, LoadingView, M
 import { formatCurrency, formatDate, formatQty, formatQtyUnit } from "@/src/format";
 import { colors, fonts, radius, spacing, touch } from "@/src/theme";
 import type { Product, StockEntry } from "@/src/types";
-import { roundQty, unitShort, wholeUnit } from "@/src/units";
+import { roundQty, unitLabel, unitShort, wholeUnit } from "@/src/units";
 
 type Change = "add" | "remove";
 
@@ -168,7 +168,7 @@ function StockSheet({ product: p, kind, onClose, onDone }: { product: Product; k
             maxFontSizeMultiplier={MAX_FONT_SCALE} testID="stock-qty" accessibilityLabel={t("How many")}
             style={{ width: 120, height: 72, textAlign: "center", fontFamily: fonts.display, fontSize: 40, color: colors.ink,
               borderWidth: 2, borderColor: ok ? colors.green : colors.red, borderRadius: radius.lg }} />
-          <T v="caption" testID="stock-unit">{unitShort(p.unit)}</T>
+          {!!unitLabel(p.unit) && <T v="caption" testID="stock-unit">{unitLabel(p.unit)}</T>}
         </View>
         <Pressable accessibilityLabel={t("Increase quantity")} onPress={() => set(n + 1)} style={[round, { backgroundColor: adding ? colors.green : colors.red }]} testID="stock-plus">
           <Icon name="plus" size={32} color={colors.white} />

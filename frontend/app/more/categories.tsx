@@ -1,6 +1,7 @@
 // Categories: rename, GST % (only when GST registered), add, delete an unused one.
 import { useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Pressable, View } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
@@ -39,7 +40,7 @@ export default function Categories() {
   return (
     <Screen bg={colors.surface}>
       <Header title={t("Categories")} />
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView bottomOffset={24} contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }} keyboardShouldPersistTaps="handled">
         <T v="body" color={colors.inkSoft}>
           {gst ? t("Tap a category to rename it or change its GST rate. Prices include GST, and the bill shows the tax portion.")
             : t("Your shop is not GST registered, so no tax is shown on bills. Tap a category to rename it.")}
@@ -59,7 +60,7 @@ export default function Categories() {
           <Button title={t("Add")} icon="plus" size="md" disabled={!newName.trim()} testID="cat-add"
             onPress={() => call(async () => { await apiPost("/categories", { name: newName.trim(), gst_percent: 0 }); setNewName(""); })} />
         </View>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </Screen>
   );
 }

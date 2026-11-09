@@ -16,6 +16,7 @@ import { AuthProvider, useAuth } from "@/src/auth";
 import { CartProvider } from "@/src/cart-context";
 import { ConfirmHost } from "@/src/confirm";
 import { AppGate } from "@/src/components/app-gate";
+import { CameraHost } from "@/src/components/camera-host";
 import { CropHost } from "@/src/components/crop-host";
 import { ErrorBoundary, RouteErrorBoundary } from "@/src/components/error-boundary";
 import { ToastProvider } from "@/src/components/toast";
@@ -77,6 +78,7 @@ function RootLayout() {
                         unstable_screenErrorBoundary={RouteErrorBoundary} />
                     </AppGate>
                     <ConfirmHost />
+                    <CameraHost />
                     <CropHost />
                   </ToastProvider>
                 </CartProvider>

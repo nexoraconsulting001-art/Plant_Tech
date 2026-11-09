@@ -1,6 +1,7 @@
 // The order being built: its customer (a must), items and discount. Each customer has one saved order on
 // the server, so a worker can start Kavita's order, bill Rahul meanwhile, and Kavita's items come back
-// when anyone in the shop picks her again. Saved orders are never listed; billing or discarding removes them.
+// when anyone in the shop picks her again. Today's saved orders are listed on New order ("Today's draft orders",
+// GET /orders/cart/today); billing or discarding removes them.
 // product_id "loose-…" = a line billed without stock; the server gets product_id null for it.
 // price = the price for this order; list_price = the shop's price when the item was added.
 // gstRemoved = the owner's "Bill without GST": same total, no GST shown (saved with the order).

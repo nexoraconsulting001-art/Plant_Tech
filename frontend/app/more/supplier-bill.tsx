@@ -7,8 +7,7 @@
 // have saved it) the screen stays and the worker taps again; if the bill was changed meanwhile and the first try
 // had been saved after all, the server says so (idempotency_mismatch) and the screen closes.
 import { useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
-import { Image } from "expo-image";
+import { Pressable, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -18,6 +17,7 @@ import { useTranslation } from "react-i18next";
 import { ApiError, apiPost, noReply, serverBusy, uploadImage } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { choose, notice } from "@/src/confirm";
+import { Page, PageThumb } from "@/src/components/bill-pages";
 import { SupplierChoice, SupplierPicker } from "@/src/components/supplier-picker";
 import { useToast } from "@/src/components/toast";
 import { Badge, BottomBar, Button, Field, Header, Icon, Screen, T } from "@/src/components/ui";
@@ -26,7 +26,6 @@ import { CaptureResult, pickPages, takePhoto } from "@/src/hooks/useImageCapture
 import { colors, radius, spacing } from "@/src/theme";
 
 type Item = { key: string; product_id: string | null; matched_name: string | null; name: string; quantity: string; purchase_price: string };
-type Page = { key: string; uri: string; base64: string; path: string | null; state: "uploading" | "done" | "failed" };
 const num = (v: string) => v.replace(/[^0-9.]/g, "");
 const blank = (key: string): Item => ({ key, product_id: null, matched_name: null, name: "", quantity: "1", purchase_price: "" });
 const MAX_PAGES = 5;
@@ -239,32 +238,6 @@ export default function SupplierBill() {
       <SupplierPicker visible={picking} onClose={() => setPicking(false)} selectedId={supplier.id}
         onPick={(s) => setSupplier(s.id ? s : { ...supplier, id: null, name: s.name })} />
     </Screen>
-  );
-}
-
-function PageThumb({ page, n, onRemove, onRetry }: { page: Page; n: number; onRemove: () => void; onRetry: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <View testID={`sb-page-${n}`} style={{ width: 96, gap: 6 }}>
-      <View style={{ width: 96, height: 120, borderRadius: radius.md, overflow: "hidden", backgroundColor: colors.page, borderWidth: 1, borderColor: colors.line }}>
-        <Image source={{ uri: page.uri }} style={{ width: "100%", height: "100%" }} contentFit="cover" />
-        {page.state !== "done" && (
-          <Pressable disabled={page.state !== "failed"} onPress={onRetry} accessibilityLabel={t("Try again")}
-            style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center",
-              backgroundColor: "rgba(14,26,20,0.45)" }}>
-            {page.state === "uploading" ? <ActivityIndicator color={colors.white} /> : <Icon name="refresh" size={30} color={colors.white} />}
-          </Pressable>
-        )}
-        <Pressable onPress={onRemove} accessibilityLabel={t("Remove page {{n}}", { n })} hitSlop={8}
-          style={{ position: "absolute", right: 4, top: 4, width: 30, height: 30, borderRadius: 15, backgroundColor: colors.surface,
-            alignItems: "center", justifyContent: "center" }}>
-          <Icon name="close" size={18} color={colors.ink} />
-        </Pressable>
-      </View>
-      <T v="caption" style={{ textAlign: "center" }}>
-        {page.state === "failed" ? t("Upload failed") : t("Page {{n}}", { n })}
-      </T>
-    </View>
   );
 }
 

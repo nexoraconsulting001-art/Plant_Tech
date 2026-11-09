@@ -3,6 +3,7 @@
 // the server: a name from the start of any word, or 3+ digits from the start or end of a phone number.
 import { useEffect, useRef, useState } from "react";
 import { Pressable, RefreshControl, View } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { FlashList, type FlashListRef } from "@shopify/flash-list";
 import { useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -44,43 +45,47 @@ export default function Customers() {
         <SearchBox value={search} onChangeText={setSearch} placeholder={t("Name or phone")} loading={!!term && q.isFetching && !q.isFetchingNextPage}
           testID="customers-search" />
       </View>
-      {q.isLoading ? <LoadingView /> : q.isError && !q.items.length ? <ErrorView message={q.error.message} onRetry={q.refetch} /> : (
-        <FlashList
-          ref={list}
-          data={q.items}
-          keyExtractor={(c) => c.id}
-          contentContainerStyle={{ padding: spacing.lg }}
-          ItemSeparatorComponent={RowGap}
-          onEndReached={q.more}
-          onEndReachedThreshold={0.5}
-          refreshControl={<RefreshControl refreshing={q.isRefetching && !q.isFetchingNextPage} onRefresh={q.refresh} tintColor={colors.green} />}
-          ListHeaderComponent={total ? (
-            <T v="label" style={{ marginBottom: spacing.sm }} testID="customers-count">
-              {total === 1 ? t("1 customer") : t("{{n}} customers", { n: total })}
-            </T>
-          ) : null}
-          ListEmptyComponent={<EmptyState icon="account-group" title={term ? t("Nothing matches") : t("No customers yet")}
-            subtitle={term ? undefined : t("Customers are saved when you start a new order and will appear here.")} />}
-          ListFooterComponent={<MoreFooter loading={q.isFetchingNextPage} failed={q.isFetchNextPageError} onRetry={() => q.fetchNextPage()} />}
-          renderItem={({ item: c }) => (
-            <Pressable testID={`customer-${c.name}`} onPress={() => router.push({ pathname: "/customers/[id]", params: { id: c.id } })}
-              style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 72, borderRadius: radius.lg,
-                backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, opacity: pressed ? 0.85 : 1 })}>
-              <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.greenTint, alignItems: "center", justifyContent: "center" }}>
-                <T v="number" color={colors.greenDark}>{c.name.charAt(0).toUpperCase()}</T>
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <T v="bold">{c.name}</T>
-                <T v="small">{formatPhone(c.phone) || t("No phone")}</T>
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <T v="bold">{formatCurrency(c.total_purchases)}</T>
-                <T v="caption">{c.purchase_count === 1 ? t("1 visit") : t("{{n}} visits", { n: c.purchase_count })}</T>
-              </View>
-            </Pressable>
-          )}
-        />
-      )}
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        {q.isLoading ? <LoadingView /> : q.isError && !q.items.length ? <ErrorView message={q.error.message} onRetry={q.refetch} /> : (
+          <FlashList
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            ref={list}
+            data={q.items}
+            keyExtractor={(c) => c.id}
+            contentContainerStyle={{ padding: spacing.lg }}
+            ItemSeparatorComponent={RowGap}
+            onEndReached={q.more}
+            onEndReachedThreshold={0.5}
+            refreshControl={<RefreshControl refreshing={q.isRefetching && !q.isFetchingNextPage} onRefresh={q.refresh} tintColor={colors.green} />}
+            ListHeaderComponent={total ? (
+              <T v="label" style={{ marginBottom: spacing.sm }} testID="customers-count">
+                {total === 1 ? t("1 customer") : t("{{n}} customers", { n: total })}
+              </T>
+            ) : null}
+            ListEmptyComponent={<EmptyState icon="account-group" title={term ? t("Nothing matches") : t("No customers yet")}
+              subtitle={term ? undefined : t("Customers are saved when you start a new order and will appear here.")} />}
+            ListFooterComponent={<MoreFooter loading={q.isFetchingNextPage} failed={q.isFetchNextPageError} onRetry={() => q.fetchNextPage()} />}
+            renderItem={({ item: c }) => (
+              <Pressable testID={`customer-${c.name}`} onPress={() => router.push({ pathname: "/customers/[id]", params: { id: c.id } })}
+                style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 72, borderRadius: radius.lg,
+                  backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, opacity: pressed ? 0.85 : 1 })}>
+                <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.greenTint, alignItems: "center", justifyContent: "center" }}>
+                  <T v="number" color={colors.greenDark}>{c.name.charAt(0).toUpperCase()}</T>
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <T v="bold">{c.name}</T>
+                  <T v="small">{formatPhone(c.phone) || t("No phone")}</T>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <T v="bold">{formatCurrency(c.total_purchases)}</T>
+                  <T v="caption">{c.purchase_count === 1 ? t("1 visit") : t("{{n}} visits", { n: c.purchase_count })}</T>
+                </View>
+              </Pressable>
+            )}
+          />
+        )}
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

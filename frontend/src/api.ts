@@ -2,7 +2,7 @@
 // Server messages are shown in the app's language: `key` + `params` when the server sends them
 // (messages with numbers or names), else the English `detail` is itself the translation key.
 // Every request has a time limit (AbortSignal.timeout): 10 s, 45 s for photo uploads, 75 s for a plant photo and 180 s
-// for a supplier bill (the server gives up on Claude after 50 s and 150 s, ai_client.TOTAL_TIMEOUT, and gives the
+// for a supplier bill or a paper order (the server gives up on Claude after 50 s and 150 s, ai_client.TOTAL_TIMEOUT, and gives the
 // scan back, so the app always gets the answer or that error). No reply in time is a TimeoutError (code "timeout"),
 // no connection an ApiError with code "network"; both have status 0.
 // A caller's own signal (React Query passes one) cancels a request that is no longer needed, e.g. an older search.
@@ -19,9 +19,9 @@ export const API = `${BASE}/api`;
 const TIMEOUT_MS = 10_000;
 const UPLOAD_TIMEOUT_MS = 45_000; // a photo going up on a slow connection
 const AI_TIMEOUT_MS = 75_000; // Claude identifying a plant (server limit 50 s)
-const BILL_TIMEOUT_MS = 180_000; // Claude reading a supplier bill of several pages (server limit 150 s)
+const BILL_TIMEOUT_MS = 180_000; // Claude reading a supplier bill or a customer's paper order of several pages (server limit 150 s)
 const timeoutFor = (path: string) =>
-  path.startsWith("/ai/scan-invoice") ? BILL_TIMEOUT_MS
+  path.startsWith("/ai/scan-invoice") || path.startsWith("/ai/scan-order") ? BILL_TIMEOUT_MS
     : path.startsWith("/ai/") ? AI_TIMEOUT_MS
       : path.startsWith("/upload") ? UPLOAD_TIMEOUT_MS
         : TIMEOUT_MS;
@@ -172,11 +172,14 @@ export function fileUrl(path?: string | null): string | undefined {
   return path ? `${API}/files/${path}` : undefined;
 }
 
+// The login, for a request this file doesn't make itself (a file download, src/export-file.ts).
+export const authHeaders = (): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {});
+
 export async function fetchText(path: string): Promise<string> {
   const timer = AbortSignal.timeout(TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(`${API}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: timer });
+    res = await fetch(`${API}${path}`, { headers: authHeaders(), signal: timer });
     if (res.ok) return await res.text();
   } catch {
     if (timer.aborted) throw new TimeoutError();

@@ -1,14 +1,20 @@
 // Sales reports for a chosen date, week (Monday to Sunday) or month: total, profit, chart,
 // how customers paid, and every item sold. ◀ ▶ step through periods; tapping the date opens a picker.
+// Export (the owner, 10 Nov 2026): the period on screen as Excel (Summary, Bills and Items sheets) or CSV (the bills),
+// shared or saved on the phone (GET /api/reports/sales/export).
 import { useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { apiGet } from "@/src/api";
+import { useAuth } from "@/src/auth";
+import { exportFile } from "@/src/export-file";
 import { PeriodBar, usePeriod } from "@/src/components/period";
-import { ErrorView, Header, LoadingView, Screen, T } from "@/src/components/ui";
+import { OptionRow, Sheet } from "@/src/components/sheet";
+import { useToast } from "@/src/components/toast";
+import { Button, ErrorView, Header, Icon, LoadingView, Screen, T } from "@/src/components/ui";
 import { formatCurrency, formatQty, plural } from "@/src/format";
 import { colors, radius, spacing } from "@/src/theme";
 
@@ -24,10 +30,18 @@ export default function Reports() {
   const p = usePeriod("day", date);
   const q = useQuery<Report>({ queryKey: ["report", p.kind, p.anchor], queryFn: () => apiGet(`/reports/sales?range=${p.kind}&date=${p.anchor}`) });
   const r = q.data;
+  const { isOwner } = useAuth();
+  const [exporting, setExporting] = useState(false);
 
   return (
     <Screen bg={colors.surface}>
-      <Header title={t("Sales reports")} />
+      <Header title={t("Sales reports")} right={isOwner ? (
+        <Pressable onPress={() => setExporting(true)} accessibilityRole="button" testID="report-export" hitSlop={4}
+          style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 48, paddingHorizontal: spacing.md }}>
+          <Icon name="tray-arrow-down" size={22} color={colors.green} />
+          <T v="bold" color={colors.green}>{t("Export")}</T>
+        </Pressable>
+      ) : undefined} />
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingTop: spacing.xs, gap: spacing.lg, paddingBottom: spacing.xl }}>
         <PeriodBar p={p} />
 
@@ -81,6 +95,7 @@ export default function Reports() {
           </>
         )}
       </ScrollView>
+      {isOwner && <ExportSheet visible={exporting} onClose={() => setExporting(false)} kind={p.kind} anchor={p.anchor} start={p.start} end={p.end} />}
     </Screen>
   );
 }
@@ -122,5 +137,54 @@ function SalesChart({ buckets }: { buckets: Bucket[] }) {
       </View>
       <T v="caption" style={{ textAlign: "center" }}>{t("Tap a bar to see its total")}</T>
     </View>
+  );
+}
+
+// Excel or CSV of the period on screen, then shared or saved on the phone (downloaded in a browser).
+const FORMATS = {
+  xlsx: { mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+  csv: { mime: "text/csv" },
+} as const;
+
+function ExportSheet({ visible, onClose, kind, anchor, start, end }: {
+  visible: boolean; onClose: () => void; kind: string; anchor: string; start: string; end: string;
+}) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const [format, setFormat] = useState<keyof typeof FORMATS>("xlsx");
+  const [busy, setBusy] = useState<"share" | "save" | null>(null);
+  const web = Platform.OS === "web";
+
+  async function go(how: "share" | "save") {
+    setBusy(how);
+    try {
+      const name = `Sales_${start}${start === end ? "" : `_to_${end}`}.${format}`; // as the server names it
+      const done = await exportFile(`/reports/sales/export?range=${kind}&date=${anchor}&format=${format}`, name, FORMATS[format].mime, how);
+      if (done === "saved") toast.show(web ? t("Downloaded") : t("Saved to your phone"), "success");
+      if (done !== "cancelled") onClose();
+    } catch (e: any) {
+      toast.show(e.message, "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Sheet visible={visible} onClose={onClose} title={t("Export sales")} testID="export-sheet"
+      footer={web ? (
+        <Button title={t("Download")} icon="tray-arrow-down" onPress={() => go("save")} loading={busy === "save"} testID="export-download" />
+      ) : (
+        <>
+          <Button title={t("Share")} icon="share-variant" onPress={() => go("share")} loading={busy === "share"} disabled={!!busy} testID="export-share" />
+          <Button title={t("Save to phone")} icon="tray-arrow-down" variant="outline" size="md" onPress={() => go("save")} loading={busy === "save"}
+            disabled={!!busy} testID="export-save" />
+        </>
+      )}>
+      <T v="small">{t("The bills of the period on screen, cancelled ones marked.")}</T>
+      <OptionRow label={t("Excel")} sub={t("Summary, bills and items sold, in three sheets")} icon="microsoft-excel" selected={format === "xlsx"}
+        onPress={() => setFormat("xlsx")} testID="export-xlsx" />
+      <OptionRow label={t("CSV")} sub={t("The bills, for any spreadsheet or accounting app")} icon="file-delimited-outline" selected={format === "csv"}
+        onPress={() => setFormat("csv")} testID="export-csv" />
+    </Sheet>
   );
 }

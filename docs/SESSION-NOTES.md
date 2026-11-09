@@ -1,10 +1,24 @@
-# Hara Hisaab: where we are (session notes, updated 8 Nov 2026)
+# Hara Hisaab: where we are (session notes, updated 10 Nov 2026)
 
 Hand-over notes so the next session can pick up without the old chat. No secrets here: keys and
 passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters them. The standing rules and
 branch map are also in `CLAUDE.md` at the repo root.
 
-## Start here (9 Nov 2026)
+## Start here (10 Nov 2026)
+- **QA feedback round 1 built, on `prod-ready` only (not on QA yet).** The owner tested the QA app (build 5) and
+  asked for seven changes; all are in (section "QA feedback round 1" below): today's draft orders on New order, the
+  scan screen's search at the top and a keyboard fix across the app, the app's own camera (straight to the crop
+  screen), Match found without a quantity, no "pcs" on app screens, a WhatsApp hint line and bill link previews,
+  Sales report export (Excel and CSV), Upload order details (a customer's order on paper), and plant names
+  (Tulsi = Holy Basil, Genda = Marigold). Checked: backend ruff and the full pytest, app tsc / eslint / i18n /
+  Node tests, a local browser walkthrough, and the app's runtime fingerprint is unchanged (b82e178e), so the app
+  part reaches the installed QA app as an over-the-air update (no reinstall).
+- **Waiting for the owner:** the go to push `staging` and `main` together (QA and production must keep the same
+  server code for the move's copy command; production needs the owner's approval in GitHub), then the go for the
+  OTA update to the QA app (Actions > App update, channel staging). The owner then tests on the phone: keyboard,
+  camera, a paper order with the real Claude, WhatsApp to a phone that saved the shop's number.
+
+## Earlier: 9 Nov 2026
 - **QA app 1.2.0 built (10 Nov, 02:10 IST, owner's go):** Android 1.2.0 (versionCode 5), EAS build 6ccab331,
   from `prod-ready` 064c98d (app code as on `staging`; profile staging, "App build" workflow run 42685685343).
   APK: https://expo.dev/artifacts/eas/9p5hRB4Rf-Qmwksew5xHsyPoeoke1zVnT5TlPbkm1gc.apk . The first try (build 4,
@@ -218,6 +232,52 @@ shop too, the move evening when the setup is done. Built and rehearsed (nothing 
 - Production app builds: GitHub `production` environment (approval, `EXPO_TOKEN`), EAS production variables
   `EXPO_PUBLIC_BACKEND_URL` and `ALLOW_IP_BACKEND_URL=1` (sslip.io by decision), Branch `main` in "App build".
 - Checks: backend 465 passed, 2 skipped (+ the newest deploy test on its own), ruff clean.
+
+## QA feedback round 1 (10 Nov 2026)
+The owner's requests after testing QA app build 5 (plan approved; owner answers: WhatsApp link plain text on the
+customer's phone; hide "pcs" only in the app, the printed bill keeps it; a paper order uses the paper's price,
+else the shop's; everyone who sells sees all of today's drafts).
+- **Today's draft orders** (`GET /api/orders/cart/today`, permission sell, index `business_saved_at`, migration
+  1101): New order lists the saved orders started today (IST) and not billed, newest first, with items, total, who
+  and when; tapping one opens it (`app/order/customer.tsx`). "Change customer" still shows recent customers.
+- **Scan screen** (`app/order/scan.tsx`): the camera panel says "Tap to scan"; under it "Upload photo" and
+  "Upload order details"; "Or search by product name" opens a search mode with the box at the top (also from
+  Match found's "Not the right item? Search by name"). A photo of a bill offers "Read as order" (to Upload order
+  details with that photo) or "Open supplier bill".
+- **Keyboard:** list screens with a search (products, customers, orders, library) move with the keyboard and keep
+  taps on results; categories and Add product use the keyboard-aware scroll view; bottom sheets use the keyboard
+  library's KeyboardAvoidingView (React Native's did nothing on Android).
+- **Camera** (`src/components/camera-host.tsx`, mounted in `app/_layout.tsx`): the app's own full-screen camera
+  (expo-camera, in every build since the first) for every photo; the photo goes straight to the crop screen. Web
+  keeps the file picker; if the camera can't start, the phone's camera app opens as before.
+- **Match found:** no quantity stepper; "Add to order" adds 1 (again adds 1 more); quantity and price on the order
+  screen. `unitLabel` (src/units.ts) hides "pcs" next to numbers on app screens.
+- **WhatsApp:** WhatsApp shows a link from an unsaved number as plain text until the customer replies or saves it
+  (its own rule); the messages now end with "Reply to this message or save this number to open the link." The bill
+  page has Open Graph tags (shop and amount, bill number and date) for a link preview.
+- **Sales report export:** `GET /api/reports/sales/export?range=&date=&format=xlsx|csv` (owner, audit-logged;
+  XlsxWriter 3.3.1 added with hashes): Excel with Summary, Bills, Items; CSV of the bills (BOM, typed names never
+  run as formulas). App: Export on Sales reports, then Share or Save to phone (`src/export-file.ts`, which the
+  bill PDF's save now shares).
+- **Upload order details** (`POST /api/ai/scan-order`, `app/order/paper.tsx`): up to 5 pages, one scan per page;
+  Claude reads the lines with the shop's stock list; each line is matched like a plant scan (Claude's pick from the
+  list, else every name of a product); review: change product (close matches, search, this bill only), quantity,
+  price (the paper's, with the shop price crossed out on the order); employees can't add more than the stock.
+  Timeout 180 s in the app. Fake Claude in `tests/devserver.py` has an "order" answer.
+- **Plant names:** a richer name look-up (Hindi, Hinglish spellings, English and trade names, accepted and older
+  botanical names) saved on the library entry (`aliases` up to 25, `names_version` 2); an hourly worker job
+  (`library.refresh_names`, minute 17, setting `ai_enrich_names`, 40 entries a run, budget guard, 3 tries a day
+  apart) looks up every entry; 70 starter plants with Hindi and Hinglish names (migration 1102); a shop entry whose
+  botanical name equals another's is merged into it; products have "Other names" (up to 10, in the product form);
+  the stock list sent to Claude carries a product's other names; matching uses every name of a product
+  (`search.product_names`, `best_product`) in plant scans, supplier bills and paper orders.
+- **Browser walkthrough (local server, fake Claude, Playwright):** drafts listed and opened; search mode at the
+  top (box at y 70, camera panel hidden); Match found without stepper; "Search by name" opens the search with the
+  box focused; no "pcs" on the order; paper order: Gulab matched Rose, paper price 180 with "Shop price ~~199~~",
+  an unmatched line sold on this bill only, the order total right; a paper price on a product already on the order
+  replaces its price (found here and fixed); "This looks like a bill" opens the paper screen with the photo; CSV and
+  Excel downloaded with the server's names; other names saved and searchable; the new screens in Hindi. Not
+  covered by a browser: the camera, the keyboard on a phone, the real Claude, WhatsApp.
 
 ## Browser test before the QA build (8 Nov 2026)
 Against a local server with exactly this code (backend/tests/devserver.py on a real MongoDB replica set via

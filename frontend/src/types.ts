@@ -8,6 +8,7 @@ export type Product = {
   unit: Unit; // what it is sold in (src/units.ts)
   stock: number; min_stock: number; low_stock: boolean; out_of_stock: boolean;
   supplier: string; notes: string; library_id: string | null;
+  other_names?: string[]; // the owner's other names for it (searchable, and matched in scans)
   photo_path: string | null; image_path: string | null; image_source: "own" | "library" | null;
   created_at: string;
 };

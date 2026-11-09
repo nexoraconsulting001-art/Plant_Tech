@@ -1,6 +1,6 @@
 import i18n from "i18next";
 
-import { unitShort } from "@/src/units";
+import { unitLabel } from "@/src/units";
 
 const locale = () => (i18n.language === "hi" ? "hi-IN" : "en-IN");
 
@@ -16,9 +16,10 @@ export function formatQty(n: number): string {
   return String(Math.round((Number(n) || 0) * 1000) / 1000);
 }
 
-// "40 pcs", "1.5 kg"; just the number for lines saved before units existed
+// "40", "1.5 kg": the number with its unit, none for pieces (units.ts unitLabel) or lines saved before units
 export function formatQtyUnit(n: number, unit?: string | null): string {
-  return unit ? `${formatQty(n)} ${unitShort(unit)}` : formatQty(n);
+  const label = unit ? unitLabel(unit) : "";
+  return label ? `${formatQty(n)} ${label}` : formatQty(n);
 }
 
 // "1 item" / "3 items": plural(n, "1 item", "{{n}} items")

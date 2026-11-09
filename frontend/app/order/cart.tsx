@@ -17,7 +17,7 @@ import { BottomBar, Button, EmptyState, Field, Header, Icon, MAX_FONT_SCALE, Scr
 import { formatCurrency, plural } from "@/src/format";
 import { askOwner, shortWarning } from "@/src/stock";
 import { colors, fonts, radius, spacing } from "@/src/theme";
-import { MAX_QTY, unitShort, wholeUnit } from "@/src/units";
+import { MAX_QTY, unitLabel, unitShort, wholeUnit } from "@/src/units";
 
 export default function OrderCart() {
   const { t } = useTranslation();
@@ -120,7 +120,7 @@ function Line({ it }: { it: CartItem }) {
           <Icon name="trash-can-outline" size={24} color={colors.red} />
           <T v="bold" color={colors.red}>{t("Remove")}</T>
         </Pressable>
-        <Stepper value={it.quantity} min={0} max={max} decimals={!whole} unit={unitShort(it.unit)}
+        <Stepper value={it.quantity} min={0} max={max} decimals={!whole} unit={unitLabel(it.unit)}
           onChange={(q) => cart.setQuantity(it.product_id, q)} testID={`cart-qty-${it.name}`}
           onLimit={stock != null && !isOwner ? () => toast.show(askOwner(it.name, stock, it.unit), "error") : undefined} />
       </View>

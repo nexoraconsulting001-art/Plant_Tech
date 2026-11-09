@@ -702,3 +702,11 @@ A code review of everything production would get (`main...prod-ready`) found 11 
   in (`deploy/copy-qa-to-prod.sh`).
 - Next: production app (prod-apk) on the owner's go, the pilots' move, then backups for production (RUNBOOK 3),
   notifications, Play Store, domain.
+
+## Status update (10 Nov 2026): QA feedback round 1
+- The owner's requests after testing QA app build 5 are built on `prod-ready` (docs/SESSION-NOTES.md, "QA
+  feedback round 1"): today's draft orders, the scan screen and keyboard, the app's own camera, Match found, no
+  "pcs", WhatsApp hint and link previews, sales export (Excel, CSV), paper orders, plant names. Server changes:
+  migrations 1101 (index) and 1102 (starter names), a new hourly worker job, XlsxWriter. The app part is
+  JavaScript only (fingerprint unchanged): an over-the-air update to the QA app after the owner's go.
+- Next: on the owner's go, `staging` and `main` together, then the OTA to QA; the owner's phone test.

@@ -4,6 +4,7 @@
 // The Orders tab shows it as is; Employees → a person opens it with that person and period already chosen.
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, SectionList, View } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
@@ -113,43 +114,47 @@ export function OrdersView({ start, title, onBack }: { start?: OrdersStart; titl
         </ScrollView>
       </View>
 
-      {list.isLoading ? <LoadingView /> : list.isError ? <ErrorView message={(list.error as Error).message} onRetry={list.refetch} /> : (
-        <SectionList
-          sections={sections}
-          keyExtractor={(o) => o.id}
-          stickySectionHeadersEnabled
-          contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
-          refreshControl={<RefreshControl refreshing={list.isRefetching} onRefresh={() => { list.refetch(); summary.refetch(); }} tintColor={colors.green} />}
-          onEndReachedThreshold={0.4}
-          onEndReached={() => { if (list.hasNextPage && !list.isFetchingNextPage) list.fetchNextPage(); }}
-          ListHeaderComponent={s ? (
-            <View style={{ marginTop: spacing.md, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.greenTint, gap: 6 }} testID="orders-summary">
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", gap: spacing.sm }}>
-                <T v="bold" color={colors.greenDark}>{plural(s.orders, "1 order", "{{n}} orders")}</T>
-                <T v="title" color={colors.greenDark}>{formatCurrency(s.sales)}</T>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        {list.isLoading ? <LoadingView /> : list.isError ? <ErrorView message={(list.error as Error).message} onRetry={list.refetch} /> : (
+          <SectionList
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            sections={sections}
+            keyExtractor={(o) => o.id}
+            stickySectionHeadersEnabled
+            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
+            refreshControl={<RefreshControl refreshing={list.isRefetching} onRefresh={() => { list.refetch(); summary.refetch(); }} tintColor={colors.green} />}
+            onEndReachedThreshold={0.4}
+            onEndReached={() => { if (list.hasNextPage && !list.isFetchingNextPage) list.fetchNextPage(); }}
+            ListHeaderComponent={s ? (
+              <View style={{ marginTop: spacing.md, padding: spacing.lg, borderRadius: radius.lg, backgroundColor: colors.greenTint, gap: 6 }} testID="orders-summary">
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", gap: spacing.sm }}>
+                  <T v="bold" color={colors.greenDark}>{plural(s.orders, "1 order", "{{n}} orders")}</T>
+                  <T v="title" color={colors.greenDark}>{formatCurrency(s.sales)}</T>
+                </View>
+                <T v="small" color={colors.greenDark}>
+                  {(["Cash", "UPI", "Card"] as const).map((m) => `${t(m)} ${formatCurrency(s.by_method[m])}`).join("  ·  ")}
+                </T>
               </View>
-              <T v="small" color={colors.greenDark}>
-                {(["Cash", "UPI", "Card"] as const).map((m) => `${t(m)} ${formatCurrency(s.by_method[m])}`).join("  ·  ")}
-              </T>
-            </View>
-          ) : null}
-          renderSectionHeader={({ section }) => {
-            const d = s?.by_day[section.day];
-            return (
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", gap: spacing.sm, paddingTop: spacing.lg, paddingBottom: spacing.sm,
-                backgroundColor: colors.page }}>
-                <T v="bold">{dayLabelLong(section.day)}</T>
-                {!!d && <T v="label">{`${plural(d.orders, "1 order", "{{n}} orders")} · ${formatCurrency(d.sales)}`}</T>}
-              </View>
-            );
-          }}
-          renderItem={({ item }) => <View style={{ marginBottom: spacing.sm }}><OrderRow o={item} showBy={seesAll} /></View>}
-          ListEmptyComponent={<EmptyState icon="receipt-text-outline" title={filtered ? t("No orders match") : t("No orders yet")}
-            subtitle={filtered ? t("Try different filters, or tap Clear all.") : undefined} />}
-          ListFooterComponent={list.isFetchingNextPage ? <ActivityIndicator color={colors.green} style={{ margin: spacing.lg }} />
-            : !list.hasNextPage && sections.length ? <T v="caption" style={{ textAlign: "center", marginTop: spacing.sm }}>{t("That's all the orders")}</T> : null}
-        />
-      )}
+            ) : null}
+            renderSectionHeader={({ section }) => {
+              const d = s?.by_day[section.day];
+              return (
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", gap: spacing.sm, paddingTop: spacing.lg, paddingBottom: spacing.sm,
+                  backgroundColor: colors.page }}>
+                  <T v="bold">{dayLabelLong(section.day)}</T>
+                  {!!d && <T v="label">{`${plural(d.orders, "1 order", "{{n}} orders")} · ${formatCurrency(d.sales)}`}</T>}
+                </View>
+              );
+            }}
+            renderItem={({ item }) => <View style={{ marginBottom: spacing.sm }}><OrderRow o={item} showBy={seesAll} /></View>}
+            ListEmptyComponent={<EmptyState icon="receipt-text-outline" title={filtered ? t("No orders match") : t("No orders yet")}
+              subtitle={filtered ? t("Try different filters, or tap Clear all.") : undefined} />}
+            ListFooterComponent={list.isFetchingNextPage ? <ActivityIndicator color={colors.green} style={{ margin: spacing.lg }} />
+              : !list.hasNextPage && sections.length ? <T v="caption" style={{ textAlign: "center", marginTop: spacing.sm }}>{t("That's all the orders")}</T> : null}
+          />
+        )}
+      </KeyboardAvoidingView>
 
       <Sheet visible={sheet === "date"} onClose={() => setSheet("")} title={t("Dates")}>
         {([["all", t("All dates")], ["today", t("Today")], ["yesterday", t("Yesterday")], ["week", t("This week")], ["month", t("This month")]] as const).map(([k, label]) => (

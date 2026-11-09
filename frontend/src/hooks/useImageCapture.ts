@@ -1,8 +1,11 @@
 // Taking or picking a photo: camera / gallery → the app's own crop screen → a small JPEG (base64)
 // ready to upload. The phone's own editor is not used (it adds rotate and flip and can't be styled).
+// The camera is the app's own (camera-host.tsx), so a photo goes straight to the crop screen without the phone camera
+// app's review step; the phone's camera app is used only on the web and if the app's camera can't start.
 import * as ImagePicker from "expo-image-picker";
 import i18n from "i18next";
 
+import { openCamera } from "@/src/components/camera-host";
 import { CropOptions, cropImage } from "@/src/components/crop-host";
 import { cropAndShrink, normalize } from "@/src/image-tools";
 
@@ -23,10 +26,21 @@ async function allowed(source: "camera" | "gallery") {
 async function capture(source: "camera" | "gallery", options: CaptureOptions = {}): Promise<CaptureOutcome> {
   const perm = await allowed(source);
   if (!perm.granted) return { status: "denied", canAskAgain: perm.canAskAgain };
+  let ownCamera = source === "camera";
   for (;;) {
-    const res = source === "camera" ? await ImagePicker.launchCameraAsync(PICK) : await ImagePicker.launchImageLibraryAsync(PICK);
-    if (res.canceled || !res.assets?.[0]) return { status: "cancelled" };
-    const picked = await normalize(res.assets[0].uri);
+    let uri: string | null = null;
+    if (ownCamera) {
+      const shot = await openCamera();
+      if (shot.kind === "cancel") return { status: "cancelled" };
+      if (shot.kind === "photo") uri = shot.uri;
+      else ownCamera = false; // it could not start: the phone's camera app
+    }
+    if (!uri) {
+      const res = source === "camera" ? await ImagePicker.launchCameraAsync(PICK) : await ImagePicker.launchImageLibraryAsync(PICK);
+      if (res.canceled || !res.assets?.[0]) return { status: "cancelled" };
+      uri = res.assets[0].uri;
+    }
+    const picked = await normalize(uri);
     const answer = await cropImage(picked, options);
     if (answer.kind === "use") return { status: "ok", result: await cropAndShrink(picked, answer.rect, options.longEdge) };
     if (answer.kind === "cancel") return { status: "cancelled" };

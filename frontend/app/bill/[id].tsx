@@ -1,5 +1,7 @@
 // A bill. Right after payment (done=1) it leads with "paid" and Send on WhatsApp.
 // WhatsApp: straight to the customer's chat if we have their number, else WhatsApp asks for a contact.
+// A link from a number the customer has not saved shows as plain text in WhatsApp until they reply or save it
+// (WhatsApp's own rule, QA 10 Nov 2026): the message says so on its last line.
 // Shop setting "Send bill on WhatsApp" on (the default): right after payment WhatsApp opens by itself, once per bill
 // (not when an old bill is opened again), and the big button stays. Off: no auto-open, and a small button for
 // when the customer asks for the bill.
@@ -70,9 +72,9 @@ export default function Bill() {
     const en = i18n.getFixedT("en"); // customers get the message in English, like the bill
     const vars = { name: greet, shop: user?.business?.name ?? "", amount: formatCurrency(inv!.grand_total), no: inv!.invoice_number, url,
       old: inv!.replaces?.invoice_number ?? "" };
-    const text = inv!.status === "Cancelled" ? en("Namaste{{name}}! Your bill {{no}} from {{shop}} has been cancelled.\nSee the bill: {{url}}", vars)
-      : inv!.replaces ? en("Namaste{{name}}! Your corrected bill from {{shop}}: {{amount}} ({{no}}, replaces {{old}}).\nSee the bill: {{url}}", vars)
-      : en("Namaste{{name}}! Your bill from {{shop}}: {{amount}} ({{no}}).\nSee the bill: {{url}}", vars);
+    const text = inv!.status === "Cancelled" ? en("Namaste{{name}}! Your bill {{no}} from {{shop}} has been cancelled.\nSee the bill: {{url}}\n\nReply to this message or save this number to open the link.", vars)
+      : inv!.replaces ? en("Namaste{{name}}! Your corrected bill from {{shop}}: {{amount}} ({{no}}, replaces {{old}}).\nSee the bill: {{url}}\n\nReply to this message or save this number to open the link.", vars)
+      : en("Namaste{{name}}! Your bill from {{shop}}: {{amount}} ({{no}}).\nSee the bill: {{url}}\n\nReply to this message or save this number to open the link.", vars);
     const digits = inv!.customer_phone.replace(/\D/g, "");
     await Linking.openURL(`https://wa.me/${digits}?text=${encodeURIComponent(text)}`);
   });

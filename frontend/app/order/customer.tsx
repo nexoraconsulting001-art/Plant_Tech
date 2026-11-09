@@ -2,9 +2,11 @@
 // WhatsApp and each customer's history is complete. Search, or add a new one. Picking a customer opens
 // their saved order if they have one (items added earlier, by anyone in the shop): see useStartOrder.
 // With ?change=1 (the "Change" on an order): the items move to the customer picked.
-// Calls: "Recent customers" (the empty search) is loaded at most every 30 minutes; each bill moves its customer to the
-// top of it on the phone (afterBill in order.ts). Typed searches go 300 ms after the last key; an overtaken one is
-// cancelled and the last results stay on screen meanwhile.
+// Before anything is typed: today's draft orders (owner, 10 Nov 2026), the orders anyone in the shop started today
+// and has not billed (GET /orders/cart/today), newest first; tapping one opens it. Changing an order's customer
+// (?change=1) shows the recent customers instead (the empty search, loaded at most every 30 minutes; each bill moves
+// its customer to the top of it on the phone, afterBill in order.ts). Typed searches go 300 ms after the last key;
+// an overtaken one is cancelled and the last results stay on screen meanwhile.
 import { useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -18,10 +20,13 @@ import { NetStatus } from "@/src/components/net-status";
 import { useToast } from "@/src/components/toast";
 import { Button, Field, Header, Icon, PhoneField, Screen, SearchBox, T } from "@/src/components/ui";
 import { useStartOrder } from "@/src/hooks/useStartOrder";
-import { formatPhone, normalizePhone, plural } from "@/src/format";
+import { formatCurrency, formatPhone, formatTime, normalizePhone, plural } from "@/src/format";
 import { colors, radius, spacing } from "@/src/theme";
 
 const RECENT_FOR_MS = 30 * 60_000;
+const DRAFTS_FOR_MS = 15_000;
+
+type Draft = { customer: OrderCustomer; lines: number; total: number; updated_at: string; updated_by: string };
 
 export default function OrderCustomerStep() {
   const { t } = useTranslation();
@@ -46,9 +51,16 @@ export default function OrderCustomerStep() {
 
   const found = useQuery<OrderCustomer[]>({ queryKey: ["customer-find", q],
     queryFn: ({ signal }) => apiGet(`/customers/find?q=${encodeURIComponent(q)}`, { signal }),
-    placeholderData: keepPreviousData, ...(q ? {} : { staleTime: RECENT_FOR_MS, gcTime: RECENT_FOR_MS }) });
+    placeholderData: keepPreviousData, enabled: !!q || !!change, // nothing typed on New order: the drafts show instead
+    ...(q ? {} : { staleTime: RECENT_FOR_MS, gcTime: RECENT_FOR_MS }) });
+  const showDrafts = !change && !q;
+  const drafts = useQuery<Draft[]>({ queryKey: ["drafts-today"], queryFn: ({ signal }) => apiGet("/orders/cart/today", { signal }),
+    enabled: !change, staleTime: DRAFTS_FOR_MS });
   const results = found.data ?? [];
   const noMatch = !!q && found.isSuccess && !found.isPlaceholderData && !results.length;
+  const rows: { key: string; customer: OrderCustomer; draft?: Draft }[] = showDrafts
+    ? (drafts.data ?? []).map((d) => ({ key: d.customer.id, customer: d.customer, draft: d }))
+    : results.map((c) => ({ key: c.id, customer: c }));
 
   async function choose(c: OrderCustomer) {
     if (opening) return;
@@ -117,8 +129,8 @@ export default function OrderCustomerStep() {
         </KeyboardAwareScrollView>
       ) : (
         <FlatList
-          data={results}
-          keyExtractor={(c) => c.id}
+          data={rows}
+          keyExtractor={(r) => r.key}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.sm }}
           ListHeaderComponent={
@@ -133,11 +145,16 @@ export default function OrderCustomerStep() {
                 </View>
               </Pressable>
               {noMatch && <T v="small">{t("No customer found with that name or number.")}</T>}
-              {!q && !found.isPlaceholderData && results.length > 0 && <T v="label">{t("Recent customers")}</T>}
+              {showDrafts && drafts.isSuccess && (
+                rows.length > 0 ? <T v="label">{t("Today's draft orders")}</T>
+                  : <T v="small" testID="drafts-none">{t("No draft orders today. Search for the customer above, or add a new one.")}</T>
+              )}
+              {showDrafts && drafts.isLoading && <ActivityIndicator color={colors.green} style={{ marginTop: spacing.md }} />}
+              {!showDrafts && !q && !found.isPlaceholderData && results.length > 0 && <T v="label">{t("Recent customers")}</T>}
             </View>
           }
-          renderItem={({ item: c }) => (
-            <Pressable onPress={() => choose(c)} testID={`customer-pick-${c.name}`}
+          renderItem={({ item: { customer: c, draft } }) => (
+            <Pressable onPress={() => choose(c)} testID={draft ? `draft-${c.name}` : `customer-pick-${c.name}`}
               style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 68, borderRadius: radius.lg,
                 borderWidth: 1, borderColor: cart.customer?.id === c.id ? colors.green : colors.line, backgroundColor: pressed ? colors.page : colors.surface })}>
               <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.greenTint, alignItems: "center", justifyContent: "center" }}>
@@ -145,9 +162,16 @@ export default function OrderCustomerStep() {
               </View>
               <View style={{ flex: 1 }}>
                 <T v="bold">{c.name}</T>
-                <T v="small">{formatPhone(c.phone)}</T>
+                {draft ? (
+                  <T v="small">{t("{{items}} · {{total}}", { items: plural(draft.lines, "1 item", "{{n}} items"), total: formatCurrency(draft.total) })}</T>
+                ) : <T v="small">{formatPhone(c.phone)}</T>}
+                {!!draft && (
+                  <T v="caption">{draft.updated_by
+                    ? t("{{name}} at {{time}}", { name: draft.updated_by, time: formatTime(draft.updated_at) })
+                    : formatTime(draft.updated_at)}</T>
+                )}
               </View>
-              {!!c.purchase_count && <T v="caption">{plural(c.purchase_count, "1 order", "{{n}} orders")}</T>}
+              {!draft && !!c.purchase_count && <T v="caption">{plural(c.purchase_count, "1 order", "{{n}} orders")}</T>}
               {opening === c.id ? <ActivityIndicator color={colors.green} /> : <Icon name="chevron-right" size={24} color={colors.muted} />}
             </Pressable>
           )}

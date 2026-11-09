@@ -2,7 +2,8 @@
 // or create new. Or take a photo and the AI fills in the name and category (photos of anything a
 // nursery doesn't sell are refused, and only accepted photos are uploaded).
 import { useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
+import { ActivityIndicator, Pressable, View } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -117,7 +118,7 @@ export default function NewProduct() {
   return (
     <Screen bg={colors.surface}>
       <Header title={t("Add product")} close />
-      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
+      <KeyboardAwareScrollView bottomOffset={24} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
         <Field label={t("Type the product name")} value={q} onChangeText={setQ} autoFocus autoCapitalize="words"
           placeholder={t("e.g. Money Plant, Clay pot")} testID="add-search" inputStyle={{ fontSize: 22 }} />
 
@@ -175,7 +176,7 @@ export default function NewProduct() {
         <View style={{ height: 8 }} />
         <Button title={scanning ? t("Identifying the item") : t("Identify from a photo")} icon="camera" variant="scan"
           onPress={scan} loading={scanning} testID="add-scan" />
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </Screen>
   );
 }

@@ -29,6 +29,12 @@ export function unitShort(u?: string | null): string {
   }
 }
 
+// The unit next to a number on the app's screens: none for pieces, which is understood (owner, 10 Nov 2026:
+// "remove pcs from all the screens"); kg, L and the rest stay. The printed bill keeps "pcs" (backend).
+export function unitLabel(u?: string | null): string {
+  return (u ?? "pcs") === "pcs" ? "" : unitShort(u);
+}
+
 // "Kilogram": the name in the unit chooser
 export function unitName(u?: string | null): string {
   switch (u) {

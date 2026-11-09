@@ -8,6 +8,7 @@
 // `low`) are applied to each page as it arrives; a sort other than by name needs every product, so it loads them all.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { FlashList, type FlashListRef } from "@shopify/flash-list";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
@@ -149,58 +150,62 @@ export default function Products() {
         </ScrollView>
       </View>
 
-      {q.isLoading ? <LoadingView /> : q.isError && !q.items.length ? <ErrorView message={q.error.message} onRetry={q.refetch} /> : (
-        <FlashList
-          ref={list}
-          data={shown}
-          keyExtractor={(p) => p.id}
-          contentContainerStyle={{ padding: spacing.lg }}
-          ItemSeparatorComponent={RowGap}
-          onEndReached={q.more}
-          onEndReachedThreshold={0.5}
-          refreshControl={<RefreshControl refreshing={q.isRefetching && !q.isFetchingNextPage}
-            onRefresh={() => { counted.refetch(); q.refresh(); }} tintColor={colors.green} />}
-          ListHeaderComponent={hasAny ? (
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, minHeight: 32,
-              marginBottom: spacing.sm }}>
-              <T v="label" style={{ flexShrink: 1 }} testID="products-count">
-                {filtered
-                  ? (matching === undefined ? "" : counts.all === undefined ? t("{{n}} products", { n: matching })
-                    : t("{{n}} of {{all}} products", { n: matching, all: counts.all }))
-                  : counts.all === undefined ? ""
-                    : t("{{all}} products · {{low}} low · {{out}} out of stock", { all: counts.all, low: counts.low, out: counts.out })}
-              </T>
-              {filtered && (
-                <Pressable onPress={() => { setSearch(""); setCategory(""); setStock(""); }} hitSlop={8} testID="products-clear">
-                  <T v="bold" color={colors.red}>{t("Clear all")}</T>
-                </Pressable>
-              )}
-            </View>
-          ) : null}
-          ListEmptyComponent={q.isPlaceholderData || q.hasNextPage ? <ActivityIndicator color={colors.green} style={{ paddingVertical: spacing.xl }} /> : (
-            <EmptyState icon="sprout" title={hasAny ? t("Nothing matches") : t("No products yet")}
-              subtitle={hasAny ? t("Try different filters, or tap Clear all.") : t("Add the plants, pots and other items you sell.")} />
-          )}
-          ListFooterComponent={<MoreFooter loading={q.isFetchingNextPage} failed={q.isFetchNextPageError} onRetry={() => q.fetchNextPage()} />}
-          renderItem={({ item: p }) => (
-            <Pressable testID={`product-${p.name}`} onPress={() => router.push({ pathname: "/products/[id]", params: { id: p.id } })}
-              style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 76, borderRadius: radius.lg,
-                backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, opacity: pressed ? 0.85 : 1 })}>
-              <Thumb path={p.image_path} thumbPath={p.thumb_path} size={56} />
-              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                <T v="bold">{p.name}</T>
-                <T v="small">{[formatCurrency(p.selling_price), p.category && t(p.category)].filter(Boolean).join(" · ")}</T>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        {q.isLoading ? <LoadingView /> : q.isError && !q.items.length ? <ErrorView message={q.error.message} onRetry={q.refetch} /> : (
+          <FlashList
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            ref={list}
+            data={shown}
+            keyExtractor={(p) => p.id}
+            contentContainerStyle={{ padding: spacing.lg }}
+            ItemSeparatorComponent={RowGap}
+            onEndReached={q.more}
+            onEndReachedThreshold={0.5}
+            refreshControl={<RefreshControl refreshing={q.isRefetching && !q.isFetchingNextPage}
+              onRefresh={() => { counted.refetch(); q.refresh(); }} tintColor={colors.green} />}
+            ListHeaderComponent={hasAny ? (
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, minHeight: 32,
+                marginBottom: spacing.sm }}>
+                <T v="label" style={{ flexShrink: 1 }} testID="products-count">
+                  {filtered
+                    ? (matching === undefined ? "" : counts.all === undefined ? t("{{n}} products", { n: matching })
+                      : t("{{n}} of {{all}} products", { n: matching, all: counts.all }))
+                    : counts.all === undefined ? ""
+                      : t("{{all}} products · {{low}} low · {{out}} out of stock", { all: counts.all, low: counts.low, out: counts.out })}
+                </T>
+                {filtered && (
+                  <Pressable onPress={() => { setSearch(""); setCategory(""); setStock(""); }} hitSlop={8} testID="products-clear">
+                    <T v="bold" color={colors.red}>{t("Clear all")}</T>
+                  </Pressable>
+                )}
               </View>
-              <View style={{ alignItems: "flex-end" }}>
-                {p.stock < 0 ? <><T v="number" color={colors.red}>{formatQty(p.stock)}</T><T v="caption" color={colors.red}>{t("below zero")}</T></>
-                  : p.out_of_stock ? <Badge text={t("Out of stock")} tone="red" />
-                  : p.low_stock ? <Badge text={t("Low · {{n}}", { n: formatQty(p.stock) })} tone="amber" />
-                  : <><T v="number">{formatQty(p.stock)}</T><T v="caption">{t("in stock")}</T></>}
-              </View>
-            </Pressable>
-          )}
-        />
-      )}
+            ) : null}
+            ListEmptyComponent={q.isPlaceholderData || q.hasNextPage ? <ActivityIndicator color={colors.green} style={{ paddingVertical: spacing.xl }} /> : (
+              <EmptyState icon="sprout" title={hasAny ? t("Nothing matches") : t("No products yet")}
+                subtitle={hasAny ? t("Try different filters, or tap Clear all.") : t("Add the plants, pots and other items you sell.")} />
+            )}
+            ListFooterComponent={<MoreFooter loading={q.isFetchingNextPage} failed={q.isFetchNextPageError} onRetry={() => q.fetchNextPage()} />}
+            renderItem={({ item: p }) => (
+              <Pressable testID={`product-${p.name}`} onPress={() => router.push({ pathname: "/products/[id]", params: { id: p.id } })}
+                style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, minHeight: 76, borderRadius: radius.lg,
+                  backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, opacity: pressed ? 0.85 : 1 })}>
+                <Thumb path={p.image_path} thumbPath={p.thumb_path} size={56} />
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <T v="bold">{p.name}</T>
+                  <T v="small">{[formatCurrency(p.selling_price), p.category && t(p.category)].filter(Boolean).join(" · ")}</T>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  {p.stock < 0 ? <><T v="number" color={colors.red}>{formatQty(p.stock)}</T><T v="caption" color={colors.red}>{t("below zero")}</T></>
+                    : p.out_of_stock ? <Badge text={t("Out of stock")} tone="red" />
+                    : p.low_stock ? <Badge text={t("Low · {{n}}", { n: formatQty(p.stock) })} tone="amber" />
+                    : <><T v="number">{formatQty(p.stock)}</T><T v="caption">{t("in stock")}</T></>}
+                </View>
+              </Pressable>
+            )}
+          />
+        )}
+      </KeyboardAvoidingView>
 
       {can("stock") && (
         <BottomBar style={{ flexDirection: "row" }}>

@@ -127,6 +127,7 @@ Owner A adds employee W (Employees → Manage → Add employee). Test with W log
 | E.17a | Add a new product with a plain Hindi or Hinglish name (e.g. `Gendaa`), wait a minute, then search it in English (`marigold`) | Found: its other names were looked up | 2 | | |
 | E.18 | 300+ products (use the demo shop) | List scrolls smoothly; search answers instantly | 2 | | |
 | E.19 | Add product → Identify from a photo of a laptop | Alert "Not a nursery item"; no form opens and the photo is not uploaded | 1 | | |
+| E.20 | Edit a product: "Other names" `Holy Basil, Shyama` | Saved; searching `holy` or `shyama` finds it; a scan or a paper order that says Holy Basil matches it | 1 | | |
 
 ## F. Shared picture library (admin)
 | # | Steps | Expected | P | ✅/❌ | Notes |
@@ -143,9 +144,9 @@ Owner A adds employee W (Employees → Manage → Add employee). Test with W log
 ## G. New order
 | # | Steps | Expected | P | ✅/❌ | Notes |
 |---|---|---|---|---|---|
-| G.0 | New order | First "Who is buying?": recent customers, search by name or any part of the phone | 1 | | |
+| G.0 | New order | First "Who is buying?": search by name or any part of the phone, then "Today's draft orders" (orders anyone in the shop started today and has not billed: customer, items and total, who and when, newest first); tapping one opens it | 1 | | |
 | G.0a | Search finds nobody → "Add … as a new customer" | Name and phone both needed; saved customer is picked and you go on to add items | 1 | | |
-| G.0b | Kavita: add 2 items → back to Home → New order → Rahul: add 1 → bill Rahul | Home never shows a saved order; Rahul's bill is made | 1 | | |
+| G.0b | Kavita: add 2 items → back to Home → New order → Rahul: add 1 → bill Rahul | Home never shows a saved order; New order lists Kavita under "Today's draft orders" (Rahul is gone once billed); Rahul's bill is made | 1 | | |
 | G.0c | New order → Kavita again (on this phone, another phone, or as the employee) | Her 2 items come back by themselves with "Kavita's saved order: 2 items"; the order screen opens | 1 | | |
 | G.0d | "Discard" (top right on Add items / Order) | Asks first; then Home; picking Kavita again gives an empty order; the customer stays saved | 1 | | |
 | G.0e | Owner and an employee add to the SAME customer's order, one after the other | The last change wins; nothing crashes | 2 | | |
@@ -157,13 +158,15 @@ Owner A adds employee W (Employees → Manage → Add employee). Test with W log
 | G.1 | Take a photo of a plant you have | "Match found", right name, Strong match / Likely match badge | 1 | | |
 | G.2 | Photo from gallery | Same as G.1 | 1 | | |
 | G.3 | Photo of a laptop / a person / a blurry photo | Alert "Not a nursery item" (or "Item not identified") with Retake photo and Search by name; never the new-item screen | 1 | | |
-| G.3a | Photo of a supplier bill in Add items | Alert "Supplier bill detected"; Open supplier bill goes there (employees without stock permission only see the message) | 1 | | |
+| G.3a | Photo of a bill or a written list in Add items | "This looks like a bill": "Read as order" opens Upload order details with that photo as page 1; "Open supplier bill" goes there (only for those who add stock) | 1 | | |
 | G.4 | Photo of a plant you don't have | "This item is not in your products" with name filled; similar products you do have are listed under "Already in your products?" | 1 | | |
 | G.5 | Deny camera permission | Clear message to allow it in settings; app still usable with search | 1 | | |
 | G.6 | Scan while offline | "No internet…"; back to the camera screen | 1 | | |
-| G.7 | "Not the right item? Search by name" | Back to camera + search | 2 | | |
+| G.7 | "Not the right item? Search by name" on Match found | The search opens at the top with the keyboard up; the back arrow returns to the camera screen | 1 | | |
+| G.7a | Add items: tap "Or search by product name", type | The box sits at the top, results right under it, nothing under the keyboard; "Upload photo" and "Upload order details" sit under the camera panel; no separate "Tap to scan" button | 1 | | |
+| G.7b | Tap the camera panel ("Tap to scan") | The app's own camera opens (shutter, flash, close); after the photo the crop screen comes straight away, no tick / X screen of the phone's camera | 1 | | |
 | G.8 | Search 2+ letters | Results with price and stock; tap adds | 1 | | |
-| G.9 | Found product with 3 in stock: try to pick 4 | Stepper stops at 3 | 1 | | |
+| G.9 | Match found | Nothing to edit there (no quantity): price and stock shown; "Add to order" adds 1, adding again adds 1 more; quantity and price are changed on the order screen; no "pcs" anywhere on screen (kg, L stay) | 1 | | |
 | G.10 | Add the same product twice (2 + 1) | One line with 3 | 1 | | |
 | G.11 | Found product out of stock | "Out of stock" + "Sell without stock" (and "Add stock" for stock users) | 1 | | |
 | G.12 | New item → "Add to products": stock 1, order qty 2 | Error "Must be at least 2"; can't save | 1 | | |
@@ -177,6 +180,11 @@ Owner A adds employee W (Employees → Manage → Add employee). Test with W log
 | G.20 | Item in cart, owner deletes that product, then pay | Clear error "no longer in your products"; no bill; nothing taken from stock | 1 | | |
 | G.21 | **Two at once:** product with 1 left; phone 1 and phone 2 both add it; both pay | Exactly one bill; the other gets "Only 0 … left in stock"; stock ends at 0, not −1 | 1 | | |
 | G.22 | Order with 2 items where the 2nd has run out meanwhile | Payment fails; the 1st item's stock is NOT reduced | 1 | | |
+| G.23 | Upload order details: photo of a handwritten order (e.g. "Tulsi 2 @50, Genda 10, Gamla 3") | Each line: what is written, the product it matched (Tulsi, Marigold through its other names), quantity, and the paper's price (the order shows the shop's price crossed out), else the shop's price | 1 | | |
+| G.23a | A line that matched nothing, and a wrong match | "Choose": close matches, a search, or "Sell on this bill only"; "Change" on a matched line does the same; "Add N items to the order" stays off until every line has a product or is removed | 1 | | |
+| G.23b | Employee: a paper order with more than the stock of an item | Red note, "Add" off (as on the order screen); the owner gets the amber warning and may add | 1 | | |
+| G.23c | A photo that is not an order; 6 pages | "Not an order" with Retake; "Too many pages" (5 at most, each page is one scan of the daily limit) | 2 | | |
+| G.24 | Keyboard: category name (More → Categories), the stock / UPI / cancel-bill sheets, product search lists | The field being typed in is always above the keyboard; lists scroll to their last item | 1 | | |
 
 ## H. Payment and the bill
 | # | Steps | Expected | P | ✅/❌ | Notes |
@@ -202,6 +210,7 @@ Owner A adds employee W (Employees → Manage → Add employee). Test with W log
 | H.19 | Open the downloaded PDF | Shop logo top-left, shop name, items, GST lines, total, amount in words, "PAID · method"; A5 size | 1 | | |
 | H.20 | "Send bill on WhatsApp" with a customer number | Opens that customer's chat with the message and bill link | 1 | | |
 | H.21 | WhatsApp with a number not on WhatsApp | (Known limit 4) WhatsApp's own message | 3 | | |
+| H.21a | Bill on WhatsApp to a customer who has NOT saved the shop's number | WhatsApp's own rule: the link shows as plain text until they reply or save the number; the message's last line says so. Send to a phone that has the shop saved: the link is blue and opens the bill with a preview (shop name and amount) | 1 | | |
 | H.22 | Old bills made before customers were required (no number) | WhatsApp opens to choose a contact | 3 | | |
 | H.23 | Open the bill link on a phone that isn't logged in | Bill page shows without login; logo, items, total | 1 | | |
 | H.24 | Change one character in the bill link | "Bill not found" | 1 | | |
@@ -235,6 +244,7 @@ Owner A adds employee W (Employees → Manage → Add employee). Test with W log
 | I.8 | Brand-new shop | Friendly empty states everywhere; nothing shows NaN, undefined or ₹NaN | 1 | | |
 | I.9 | Pull down to refresh on Home, Orders, Products, Customers | Updates without leaving the screen | 2 | | |
 | I.10 | Huge sales day (₹12,34,567) | Amount fits on one line (shrinks); no overlap | 2 | | |
+| I.11 | Owner: Sales reports → Export → Excel / CSV → Share or Save to phone | Excel: sheets Summary, Bills, Items for the period on screen (cancelled bills marked, Hindi names readable); CSV: the bills, opens in Excel / Google Sheets; employees have no Export | 1 | | |
 
 ## J. Customers
 | # | Steps | Expected | P | ✅/❌ | Notes |

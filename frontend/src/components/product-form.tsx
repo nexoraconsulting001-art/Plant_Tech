@@ -17,13 +17,14 @@ import { formatCurrency } from "@/src/format";
 import { pickFromGallery, takePhoto } from "@/src/hooks/useImageCapture";
 import { LONG_EDGE } from "@/src/image-tools";
 import { colors, radius, spacing } from "@/src/theme";
-import { isPlantCategory, roundQty, Unit, UNITS, unitName, unitShort, wholeUnit } from "@/src/units";
+import { isPlantCategory, roundQty, Unit, UNITS, unitLabel, unitName, unitShort, wholeUnit } from "@/src/units";
 
 export type ProductValues = {
   name: string; botanical_name: string; category_id: string | null; library_id: string | null;
   photo_path: string | null; library_image: string | null;
   selling_price: string; stock: string; cost_price: string; min_stock: string;
   unit: Unit; plant?: boolean; // plant: the photo was of a plant (always pieces)
+  other_names?: string; // the owner's other names for it, separated by commas (Tulsi, Holy Basil)
 };
 
 export const emptyProduct: ProductValues = {
@@ -32,6 +33,8 @@ export const emptyProduct: ProductValues = {
 };
 
 const num = (v: string) => v.replace(/[^0-9.]/g, "");
+const OTHER_NAMES_MAX = 10; // as the server keeps (products.OTHER_NAMES_MAX)
+const otherNames = (v = "") => v.split(/[,\n]/).map((x) => x.trim()).filter(Boolean).slice(0, OTHER_NAMES_MAX);
 const digits = (v: string) => v.replace(/\D/g, "");
 
 export function ProductForm({ initial, isNew, onSave, saving, extra }: {
@@ -76,6 +79,7 @@ export function ProductForm({ initial, isNew, onSave, saving, extra }: {
     const body: Record<string, unknown> = {
       name: v.name.trim(), botanical_name: v.botanical_name, category_id: v.category_id, photo_path: v.photo_path,
       selling_price: Number(v.selling_price) || 0, min_stock: roundQty(Number(v.min_stock) || 0, whole), unit,
+      other_names: otherNames(v.other_names),
     };
     if (isOwner && v.cost_price !== "") body.cost_price = Number(v.cost_price) || 0;
     if (isNew) {
@@ -110,6 +114,9 @@ export function ProductForm({ initial, isNew, onSave, saving, extra }: {
         <Section title={t("Details")}>
           <Field label={t("Product name")} value={v.name} onChangeText={(name) => set({ name })} autoCapitalize="words" testID="product-name"
             placeholder={t("e.g. Money Plant")} />
+          <Field label={t("Other names (optional)")} value={v.other_names ?? ""} onChangeText={(other_names) => set({ other_names })}
+            autoCapitalize="words" testID="product-other-names" placeholder={t("e.g. Pothos, Golden Pothos")}
+            hint={t("Other names customers use, separated by commas. Search and scans find the product by these too.")} />
           <CategoryPicker value={v.category_id} onChange={(category_id) => set({ category_id })} />
           {plant ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }} testID="product-unit-plant">
@@ -125,10 +132,10 @@ export function ProductForm({ initial, isNew, onSave, saving, extra }: {
             hint={whole ? undefined : t("Price for 1 {{unit}}", { unit: unitShort(unit) })} />
           <View style={{ flexDirection: "row", gap: spacing.md }}>
             {isNew && (
-              <Field style={{ flex: 1 }} label={`${t("Stock now")} · ${unitShort(unit)}`} value={v.stock} keyboardType={whole ? "number-pad" : "decimal-pad"}
+              <Field style={{ flex: 1 }} label={unitLabel(unit) ? `${t("Stock now")} · ${unitLabel(unit)}` : t("Stock now")} value={v.stock} keyboardType={whole ? "number-pad" : "decimal-pad"}
                 onChangeText={(x) => set({ stock: count(x) })} placeholder="0" testID="product-stock" />
             )}
-            <Field style={{ flex: 1 }} label={`${t("Low-stock alert at")} · ${unitShort(unit)}`} value={v.min_stock} keyboardType={whole ? "number-pad" : "decimal-pad"}
+            <Field style={{ flex: 1 }} label={unitLabel(unit) ? `${t("Low-stock alert at")} · ${unitLabel(unit)}` : t("Low-stock alert at")} value={v.min_stock} keyboardType={whole ? "number-pad" : "decimal-pad"}
               onChangeText={(x) => set({ min_stock: count(x) })} testID="product-min" />
           </View>
           {isOwner && (

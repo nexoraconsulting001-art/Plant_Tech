@@ -57,7 +57,7 @@ export default function EditProduct() {
           initial={{ name: p.name, botanical_name: p.botanical_name, category_id: p.category_id, library_id: p.library_id,
             photo_path: p.photo_path, library_image: p.image_source === "library" ? p.image_path : null,
             selling_price: String(p.selling_price), stock: String(p.stock), cost_price: p.cost_price ? String(p.cost_price) : "",
-            min_stock: String(p.min_stock), unit: p.unit ?? "pcs" }}
+            min_stock: String(p.min_stock), unit: p.unit ?? "pcs", other_names: (p.other_names ?? []).join(", ") }}
           extra={isOwner ? <Button title={t("Delete product")} icon="trash-can-outline" variant="danger" size="md" onPress={remove} testID="product-delete" /> : undefined} />
       )}
     </Screen>
