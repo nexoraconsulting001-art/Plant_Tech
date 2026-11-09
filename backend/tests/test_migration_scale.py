@@ -101,7 +101,9 @@ def test_0401_fills_a_customer_saved_behind_the_walk(client, monkeypatch):
 
 def test_walk_visits_every_match_once_in_id_order(client):
     db = db_module.state.db
-    run(db.walk_check.insert_many([{"n": i, "odd": i % 2 == 1} for i in range(2345)]))
+    # _ids that rise with n: generated ObjectIds only do within one second while their 3-byte counter doesn't wrap
+    # (CI on 9 Nov: the counter wrapped at n=742, so the walk, rightly in _id order, began there)
+    run(db.walk_check.insert_many([{"_id": ObjectId(f"{i:024x}"), "n": i, "odd": i % 2 == 1} for i in range(2345)]))
 
     async def collect(query):
         seen = []
