@@ -302,3 +302,68 @@ async def scan_invoice(body: InvoicePayload, user: dict = Depends(auth.require("
     result["supplier_match"] = suppliers.view(found) if found else None
     result["pages"] = pages
     return result
+
+
+class OrderPayload(BaseModel):
+    image_paths: list[str] = Field(min_length=1, max_length=20)  # pages already uploaded (/api/upload), in order
+
+
+ORDER_OTHERS = 3  # other close products offered per line
+
+
+@router.post("/scan-order")
+async def scan_order(body: OrderPayload, user: dict = Depends(auth.require("sell"))):
+    """A customer's order on paper (a list, or a bill the shop wrote by hand) read into lines for the current order
+    (owner, 10 Nov 2026: "Upload order details"). Claude chooses each line's product from the shop's own list, as
+    for a plant scan; that choice counts only when it really is one of the products, else the line's name is matched
+    through every name of the products (search.product_names). One scan per page.
+    Answer: items [{name, quantity, price (as written, one unit; 0 = none), matched_product (or None),
+    other_products (up to 3 close ones)}], pages."""
+    db = get_db()
+    bid = user["business_id"]
+    if len(body.image_paths) > MAX_PAGES:
+        raise AppError(422, "You can add up to {{n}} pages for one order.", "too_many_pages", n=MAX_PAGES)
+    for path in body.image_paths:
+        if not await db.uploads.find_one({"path": path, "business_id": bid}):
+            raise HTTPException(400, "A page photo could not be found. Please add it again.")
+    pages = len(body.image_paths)
+    await _limit_user(user)
+    period = await use_quota(db, bid, pages)
+    stock, names_of = await _stock(db, bid)
+
+    async def read():
+        images = [(await run_in_threadpool(storage_client.get_object, path))[0] for path in body.image_paths]
+        return await ai_client.scan_order(images, stock, normalised=True)
+
+    try:
+        result = await _run(db, bid, pages, period, read)
+    except ai_client.Truncated:
+        raise AppError(422, "This order is too long to read in one go. Please photograph fewer pages at a time, "
+                            "or add the items one by one.", "order_too_long")
+    logger.info("scan-order: pages=%s is_order=%s lines=%s reason=%s", pages, result["is_order"],
+                len(result["items"]), result["reason"])
+    if not result["is_order"]:
+        raise AppError(422, "This photo does not appear to show an order or a list of items. Please photograph the "
+                            "paper clearly, or add the items one by one.", "not_an_order")
+    by_key = _name_index(stock, names_of)
+    lines, wanted = [], []
+    for it in result["items"]:
+        chosen = _listed(by_key, it["stock_match"])
+        also = [p for n in it["stock_alternatives"] if (p := _listed(by_key, n))]
+        matched, similar = best_product(stock, [it["name"]], names_of)
+        matched = chosen or matched  # Claude read the line next to the list: its choice wins
+        others, seen = [], {matched["id"]} if matched else set()
+        for p in [*also, *similar]:
+            if p["id"] not in seen:
+                seen.add(p["id"])
+                others.append(p["id"])
+        lines.append((it, matched["id"] if matched else None, others[:ORDER_OTHERS]))
+        wanted += ([matched["id"]] if matched else []) + others[:ORDER_OTHERS]
+    full = await db.products.find({"business_id": bid, "id": {"$in": list(set(wanted))}, "deleted_at": None},
+                                  {"_id": 0}).to_list(None)
+    by_id = {v["id"]: v for v in await views(db, user, full)}
+    items = [{"name": it["name"], "quantity": it["quantity"], "price": it["price"],
+              "matched_product": by_id.get(match) if match else None,
+              "other_products": [by_id[i] for i in others if i in by_id]} for it, match, others in lines]
+    return {"items": items, "pages": pages}
+

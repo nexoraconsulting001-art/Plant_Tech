@@ -48,20 +48,22 @@ _settings = get_settings()
 MODEL_NAME = _settings.claude_model  # every kind of call uses it unless CLAUDE_MODEL_<KIND> is set
 EFFORT_PLANT = _settings.claude_effort_plant
 EFFORT_INVOICE = _settings.claude_effort_invoice
+EFFORT_ORDER = _settings.claude_effort_order
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 # Models that take `fallbacks: "default"` on the Claude API (Haiku 5.5 has no server-side fallback).
 FALLBACK_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1"}
 MAX_IMAGE_EDGE = 1568  # longest edge Claude uses without further downscaling
 # Plant photos may be sent smaller (1024 is planned with Haiku, decision D5); bills keep every pixel Claude uses.
-IMAGE_EDGE = {"plant": int(os.environ.get("AI_IMAGE_EDGE_PLANT") or MAX_IMAGE_EDGE), "invoice": MAX_IMAGE_EDGE}
+IMAGE_EDGE = {"plant": int(os.environ.get("AI_IMAGE_EDGE_PLANT") or MAX_IMAGE_EDGE), "invoice": MAX_IMAGE_EDGE,
+              "order": MAX_IMAGE_EDGE}
 MAX_IMAGE_PIXELS = 40_000_000  # phones send about 2-12 MP; the app shrinks photos before upload
 MAX_STOCK_NAMES = 600  # products listed in a plant scan's prompt (about 6 tokens each); a nursery has 50-400
 IMAGE_FORMATS = ("JPEG", "PNG", "WEBP")
 TIMEOUT = anthropic.Timeout(60.0, connect=5.0)
-CALL_TIMEOUT = {"plant": 30.0, "names": 30.0, "invoice": 120.0}  # seconds per try
+CALL_TIMEOUT = {"plant": 30.0, "names": 30.0, "invoice": 120.0, "order": 120.0}  # seconds per try
 # Seconds for the whole call (slot wait, tries, retries). The app waits 75 s for /ai/ and 180 s for a bill
 # (frontend/src/api.ts): keep these well below, so the app always gets the answer or the error.
-TOTAL_TIMEOUT = {"plant": 50.0, "names": 50.0, "invoice": 150.0}
+TOTAL_TIMEOUT = {"plant": 50.0, "names": 50.0, "invoice": 150.0, "order": 150.0}
 CACHE_MIN_TOKENS = 512  # a shorter system prompt is never cached (Sonnet 5.5 / Haiku 5.5 minimum)
 
 # Pillow refuses images over twice this when opening them and warns above it; the warning is an error here.
@@ -149,6 +151,27 @@ SYSTEM_INVOICE = (
     "- items: every line item exactly once across all pages (skip subtotal, carried-forward and tax lines); "
     "purchase_price is the per-unit cost (divide the line amount by quantity if only the amount is printed)"
 )
+SYSTEM_ORDER = (
+    "You read customer orders for a plant nursery in India from photos: a handwritten or printed list of items, a "
+    "cash memo or a bill the shop wrote by hand for a customer, often mixing English, Hindi and Hinglish. You say "
+    "so plainly when the photos show no such list.\n\n"
+    "- is_order: true only if the photos show a list of items with quantities or prices; false for plants, "
+    "products, people, screens or anything else\n"
+    "- reason: a few words explaining is_order\n"
+    "If is_order is false, leave items empty.\n"
+    "Otherwise list every item line exactly once across all pages (skip totals, discounts, taxes and notes):\n"
+    "- name: the item as written (spelling corrected only when certain)\n"
+    "- quantity: how many (1 when not written)\n"
+    "- price: the price of one unit as written; when only the line amount is written, divide it by the quantity; "
+    "0 when no price is written\n"
+    "The shop's own products are listed after these instructions. For each item:\n"
+    "- stock_match: if the item is one of the shop's products, its name copied exactly from that list (only the "
+    "name, without anything in brackets); otherwise empty string. Choose a listed product only when it is the same "
+    "plant or product (another name or spelling of it counts); when sizes are listed and the size is not written, "
+    "choose the most likely one and put the other sizes in stock_alternatives.\n"
+    "- stock_alternatives: up to 3 other names copied exactly from that list that the item could also be, most "
+    "likely first; empty when none."
+)
 SYSTEM_NAMES = (
     "You are an expert on plants and garden products sold in Indian nurseries. You list every name people use "
     "for an item, so a shop can find it, and recognise it in a photo, under any of them.\n\n"
@@ -184,6 +207,20 @@ class NameTerms(BaseModel):
     aliases: List[str]
     botanical_name: str
     botanical_synonyms: List[str]
+
+
+class OrderLine(BaseModel):
+    name: str
+    quantity: float
+    price: float
+    stock_match: str
+    stock_alternatives: List[str]
+
+
+class OrderScan(BaseModel):
+    is_order: bool
+    reason: str
+    items: List[OrderLine]
 
 
 class InvoiceItem(BaseModel):
@@ -536,6 +573,26 @@ async def scan_invoice(images: list[bytes], shop_name: str = "", normalised: boo
             {"name": it.name.strip(), "quantity": it.quantity, "purchase_price": it.purchase_price}
             for it in data.items if it.name.strip()
         ],
+    }
+
+
+async def scan_order(images: list[bytes], stock: list[dict] | None = None, normalised: bool = False) -> dict:
+    """Read a customer's order (a paper list or hand-written bill) from photos of its pages, choosing each line's
+    product from the shop's own list (`stock`, as for a plant scan). is_order is False when the photos show no list
+    of items (or Claude gave no usable answer). Raises Truncated when the answer did not fit in max_tokens."""
+    n = len(images)
+    prompt = f"These {n} photo(s) should be the page(s) of one customer's order or bill."
+    data = await _ask("order", SYSTEM_ORDER, prompt, images, OrderScan, EFFORT_ORDER, 16000 if n > 1 else 8000,
+                      normalised, context=stock_context(stock))
+    if data is None:
+        data = OrderScan(is_order=False, reason="no usable answer", items=[])
+    return {
+        "is_order": data.is_order,
+        "reason": data.reason,
+        "items": [{"name": it.name.strip(), "quantity": it.quantity if it.quantity > 0 else 1,
+                   "price": max(0.0, it.price), "stock_match": it.stock_match.strip(),
+                   "stock_alternatives": [a.strip() for a in it.stock_alternatives[:3] if a.strip()]}
+                  for it in data.items if it.name.strip()],
     }
 
 

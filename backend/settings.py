@@ -93,8 +93,10 @@ class Settings(BaseSettings):
     claude_model_plant: str = ""
     claude_model_invoice: str = ""
     claude_model_names: str = ""
+    claude_model_order: str = ""  # paper orders read into a sale (routers/ai.py /ai/scan-order)
     claude_effort_plant: str = "low"
     claude_effort_invoice: str = "medium"
+    claude_effort_order: str = "medium"
     ai_daily_limit: int = 300
     ai_enrich_names: bool = True
 
@@ -177,8 +179,9 @@ class Settings(BaseSettings):
             return self.cors_origins
         return [] if self.is_production else ["*"]
 
-    def model_for(self, kind: Literal["plant", "invoice", "names"]) -> str:
-        """The Claude model for one kind of call (CLAUDE_MODEL_PLANT / _INVOICE / _NAMES, else CLAUDE_MODEL)."""
+    def model_for(self, kind: Literal["plant", "invoice", "names", "order"]) -> str:
+        """The Claude model for one kind of call (CLAUDE_MODEL_PLANT / _INVOICE / _NAMES / _ORDER, else
+        CLAUDE_MODEL)."""
         return getattr(self, f"claude_model_{kind}") or self.claude_model
 
     def feature_flags(self) -> dict:
