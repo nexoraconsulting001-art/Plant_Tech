@@ -5,6 +5,13 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
 branch map are also in `CLAUDE.md` at the repo root.
 
 ## Start here (9 Nov 2026)
+- **QA app 1.2.0 built (10 Nov, 02:10 IST, owner's go):** Android 1.2.0 (versionCode 5), EAS build 6ccab331,
+  from `prod-ready` 064c98d (app code as on `staging`; profile staging, "App build" workflow run 42685685343).
+  APK: https://expo.dev/artifacts/eas/9p5hRB4Rf-Qmwksew5xHsyPoeoke1zVnT5TlPbkm1gc.apk . The first try (build 4,
+  EAS 5d1e565a) stopped at "Configure expo-updates": the runtime fingerprint counted the Firebase file on the EAS
+  server but not on the GitHub runner (file variables are not loaded there); `frontend/fingerprint.config.js` now
+  leaves it out (064c98d). Firebase (google-services.json) is in this build: notifications can work once the FCM
+  V1 key is in Expo credentials and PUSH_ENABLED=1 on QA.
 - **Production released, 9 Nov.** `main` = `staging` = aad471f (QA updated 21:36 IST, production 23:5x IST).
   The first production attempt stopped at the migrations (0001's suppliers backfill: old single-shop purchases have
   no `business_id`), nothing swapped. The owner then saved the old data (`~/.nurserypos/old-prod/old-prod-2026-11-09
