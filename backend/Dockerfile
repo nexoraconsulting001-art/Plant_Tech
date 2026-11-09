@@ -2,7 +2,7 @@
 # Base image pinned by tag (multi-arch: the VM is arm64). Before production pin the digest as well (supply chain):
 #   docker buildx imagetools inspect python:3.12.14-slim-bookworm   -> FROM python:3.12.14-slim-bookworm@sha256:<digest>
 #   (Docker Hub listed sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e on 2 Nov 2026; check it)
-FROM python:3.12.14-slim-bookworm
+FROM python:3.15.0-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
