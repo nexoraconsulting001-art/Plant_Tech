@@ -17,8 +17,18 @@ production settings, QA copied in, logins and photos checked on both sides). Tim
    It writes production's `~/Plant_Tech/deploy/.env` from QA's: the same Claude and photo-storage keys and
    limits, and production's own: `ENV=production`, a new login secret, its own photo folder (`nurserypos`, QA's is
    `nurserypos-staging`), its address, its name and port as today, and `ALLOW_NO_ROLLBACK=1` for the first deploy.
-   The old file is kept as `.env.before-<time>`. It prints no keys. Optional: a separate Claude key for
-   production (edit the `ANTHROPIC_API_KEY=` line with `nano ~/Plant_Tech/deploy/.env`).
+   The old file is kept as `.env.before-<time>`. It prints no keys.
+   **Production's own keys (owner's decision, 9 Nov):** a Claude key of its own and its own R2 bucket
+   (`hara-hisaab-prod`, private, Standard) with an account API token limited to that bucket (Object Read &
+   Write). After the command, `nano ~/Plant_Tech/deploy/.env` and replace the lines `ANTHROPIC_API_KEY=`,
+   `R2_BUCKET=hara-hisaab-prod`, `R2_ACCESS_KEY_ID=`, `R2_SECRET_ACCESS_KEY=` (`R2_ACCOUNT_ID` stays: same
+   Cloudflare account). If `R2_PUBLIC_BUCKET=` has a value, production needs its own public bucket too. Check
+   (prints no keys; the photo check writes and removes one small test file):
+   ```bash
+   for k in ANTHROPIC_API_KEY R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_PUBLIC_BUCKET; do [ "$(grep "^$k=" ~/Plant_Tech/deploy/.env)" = "$(grep "^$k=" ~/Plant_Tech-staging/deploy/.env)" ] && echo "$k: same as QA" || echo "$k: production's own"; done
+   docker run --rm --env-file ~/Plant_Tech/deploy/.env nurserypos-staging-api:latest python -c "import anthropic, storage_client as s; c = s.init_storage(); k = s.APP_NAME + '/_check.txt'; c.put_object(Bucket=s.R2_BUCKET, Key=k, Body=b'ok'); c.delete_object(Bucket=s.R2_BUCKET, Key=k); print('photo storage OK:', s.R2_BUCKET); anthropic.Anthropic().models.list(limit=1); print('Claude key OK')"
+   ```
+   The copy command (step D) reads QA's photos with QA's key and writes them with production's.
 2. **GitHub**, repository Settings > Environments:
    - `production`: Required reviewers = you (a production deploy and a production app build wait for your
      approval). Environment secrets: add `EXPO_TOKEN` (the same token as for staging is fine).
