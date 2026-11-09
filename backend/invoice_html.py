@@ -201,6 +201,9 @@ def render(inv: dict, biz: dict, *, public: bool = True, logo_src: str | None = 
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>{"Cancelled bill" if cancelled else doc} {e(inv.get("invoice_number"))} · {e(biz.get("name"))}</title>
+<meta property="og:type" content="website">
+<meta property="og:title" content="{e(biz.get("name"))} · {e(inr(inv.get("grand_total", 0)))}">
+<meta property="og:description" content="{"Cancelled bill" if cancelled else doc} {e(inv.get("invoice_number"))} · {e(_when(inv.get("created_at", "")))}">
 <style>
 @page {{ size: A5; margin: 10mm; }}
 * {{ box-sizing: border-box; }}

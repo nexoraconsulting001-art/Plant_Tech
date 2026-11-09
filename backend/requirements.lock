@@ -1842,3 +1842,7 @@ wrapt==2.5.2 \
     --hash=sha256:fa642d3781c061579cb138773add4a55b16f99de9ebc41603e89a756cf9e62c6 \
     --hash=sha256:fabc60720d1e4a36bbe8aaf1c32024f04c6674991313f5acaca5eeadb564c600
     # via deprecated
+xlsxwriter==3.3.1 \
+    --hash=sha256:0867761912cceac76f97ffa76eeda18c623ae9217f601be8512f55b1af4bdb6e \
+    --hash=sha256:8e2c89e59d733fe59e112317218c64fbbc276d90a8c144ebd6f7fa15e7ab184a
+    # via -r requirements.txt

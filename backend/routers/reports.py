@@ -12,17 +12,21 @@ Where the numbers come from (none of it loads more than a page of bills into the
   the bills streamed through rollups.changes(), so both ways count exactly the same.
 - The employees report always aggregates the bills: distinct customers and first/last sale cannot be rolled up.
 """
+import csv
+import io
 from datetime import date, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+import audit
 import auth
 import rollups
-from common import date_key, money, now_ist
+from common import IST, csv_text, date_key, money, now_ist
 from db import get_db
 from fast_json import respond
+from routers.exports import _download
 from routers.sales import DATE, LIVE, _filters, _scope, _sees_all, _summary, date_q, method_q
 from units import DECIMAL_UNITS, unit_of
 
@@ -192,9 +196,12 @@ async def sales_report(range: Literal["day", "today", "week", "month"] = "week",
                        user: dict = Depends(auth.require("reports"))):
     """Sales for a day, a week (Monday to Sunday) or a month; `date` picks which one (default: today)."""
     anchor = datetime.strptime(on, "%Y-%m-%d").date() if on else now_ist().date()
-    range = "day" if range == "today" else range  # noqa: A001
+    return await _sales(get_db(), user["business_id"], "day" if range == "today" else range, anchor)
+
+
+async def _sales(db, business_id: str, range: str, anchor: date) -> dict:  # noqa: A002
     keys, labels, idx = _report_buckets(range, anchor)
-    days, sold = await _period(get_db(), user["business_id"], keys[0], keys[-1])
+    days, sold = await _period(db, business_id, keys[0], keys[-1])
     buckets = [0] * len(labels)
     by_method = {m: 0 for m in rollups.METHODS}
     orders = paise = 0
@@ -284,3 +291,102 @@ async def employees_report(range: Literal["day", "week", "month"] = "day",  # no
                      "price_changes": {"lines": lines, "less": money(less)}})
     rows.sort(key=lambda r: (-r["sales"], r["role"] != "owner", r["name"].lower()))
     return {"range": range, "start": keys[0], "end": keys[-1], "sales": money(total), "orders": orders, "people": rows}
+
+
+# ---- export (owner, 10 Nov 2026: "CSV and xlsx export of the data directly in the sales report section") ----
+
+EXPORT_MAX_BILLS = 20_000
+EXPORT_BILL_FIELDS = {"_id": 0, "invoice_number": 1, "date_key": 1, "created_at": 1, "status": 1, "customer_name": 1,
+                      "customer_phone": 1, "payment_method": 1, "subtotal": 1, "discount": 1, "gst_total": 1,
+                      "grand_total": 1, "created_by": 1}
+BILL_HEADERS = ["Bill", "Date", "Time", "Customer", "Phone", "Payment", "Items total", "Discount", "GST", "Total",
+                "Status", "Billed by"]
+BILL_TEXT = {3, 11}  # columns typed by a person: written as text, never as a formula
+
+
+def _bill_row(b: dict) -> list:
+    at = b.get("created_at") or ""
+    try:
+        time = datetime.fromisoformat(at).astimezone(IST).strftime("%H:%M") if at else ""
+    except ValueError:
+        time = ""
+    return [b.get("invoice_number", ""), b.get("date_key", ""), time, b.get("customer_name") or "",
+            b.get("customer_phone") or "", b.get("payment_method") or "", money(b.get("subtotal") or 0),
+            money(b.get("discount") or 0), money(b.get("gst_total") or 0), money(b.get("grand_total") or 0),
+            b.get("status") or "Paid", (b.get("created_by") or {}).get("name", "")]
+
+
+def _csv(rows: list[list]) -> bytes:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(BILL_HEADERS)
+    for r in rows:
+        w.writerow([csv_text(v) if i in BILL_TEXT else v for i, v in enumerate(r)])
+    return buf.getvalue().encode("utf-8-sig")  # a BOM, so Excel reads Hindi names
+
+
+def _xlsx(shop: str, report: dict, rows: list[list]) -> bytes:
+    """Summary, Bills and Items sheets. Text goes in with write_string (a name starting with = stays text)."""
+    import xlsxwriter
+
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    bold, rupees = wb.add_format({"bold": True}), wb.add_format({"num_format": "#,##0.00"})
+
+    def put(ws, r, c, v, fmt=None):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            ws.write_number(r, c, v, fmt or rupees)
+        else:
+            ws.write_string(r, c, "" if v is None else str(v), fmt)
+
+    summary = wb.add_worksheet("Summary")
+    summary.set_column(0, 0, 22), summary.set_column(1, 1, 16)
+    lines = [("Shop", shop), ("From", report["start"]), ("To", report["end"]), ("Orders", report["orders"]),
+             ("Sales", report["sales"]), ("Estimated profit", report["profit"]),
+             *((f"Paid by {m}", v) for m, v in report["by_method"].items())]
+    for r, (k, v) in enumerate(lines):
+        put(summary, r, 0, k, bold)
+        put(summary, r, 1, v, None if k == "Orders" else rupees)
+    bills = wb.add_worksheet("Bills")
+    for c, h in enumerate(BILL_HEADERS):
+        put(bills, 0, c, h, bold)
+    for r, row in enumerate(rows, 1):
+        for c, v in enumerate(row):
+            put(bills, r, c, v)
+    bills.set_column(0, 2, 12), bills.set_column(3, 3, 22), bills.set_column(4, 5, 14), bills.set_column(6, 9, 12)
+    bills.set_column(10, 11, 14), bills.freeze_panes(1, 0)
+    items = wb.add_worksheet("Items")
+    for c, h in enumerate(["Item", "Quantity", "Amount"]):
+        put(items, 0, c, h, bold)
+    for r, it in enumerate(report["items"], 1):
+        put(items, r, 0, it["name"])
+        items.write_number(r, 1, it["quantity"])
+        put(items, r, 2, it["amount"])
+    items.set_column(0, 0, 28), items.set_column(1, 2, 12), items.freeze_panes(1, 0)
+    wb.close()
+    return buf.getvalue()
+
+
+@router.get("/reports/sales/export")
+async def sales_export(range: Literal["day", "week", "month"] = "day",  # noqa: A002
+                       on: str = Query("", alias="date", pattern=f"^({DATE})?$"),
+                       format: Literal["csv", "xlsx"] = "xlsx",  # noqa: A002
+                       owner: dict = Depends(auth.require("owner"))):
+    """The sales report of a day, week or month as a file: Excel (Summary, Bills, Items) or CSV (the bills, one row
+    each, cancelled ones marked). Owner only, like the other exports (customers' phone numbers); audit-logged."""
+    db = get_db()
+    bid = owner["business_id"]
+    anchor = datetime.strptime(on, "%Y-%m-%d").date() if on else now_ist().date()
+    report = await _sales(db, bid, range, anchor)
+    bills = await db.invoices.find({"business_id": bid, "date_key": {"$gte": report["start"], "$lte": report["end"]}},
+                                   EXPORT_BILL_FIELDS).sort("created_at", 1).to_list(EXPORT_MAX_BILLS)
+    rows = [_bill_row(b) for b in bills]
+    await audit.log(db, owner, "export.sales", {"type": "period", "id": f"{range}:{report['start']}"},
+                    {"format": format, "bills": len(rows)})
+    name = f"Sales_{report['start']}" + ("" if report["start"] == report["end"] else f"_to_{report['end']}")
+    if format == "csv":
+        return _download(_csv(rows), f"{name}.csv", "text/csv; charset=utf-8")
+    shop = (await db.businesses.find_one({"id": bid}, {"_id": 0, "name": 1}) or {}).get("name", "")
+    return _download(_xlsx(shop, report, rows), f"{name}.xlsx",
+                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+

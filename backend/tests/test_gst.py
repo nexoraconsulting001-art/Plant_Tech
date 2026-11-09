@@ -1,4 +1,5 @@
 """GST: GSTIN check, HSN codes, the CGST/SGST/IGST split (golden bills and rounding), and the tax invoice."""
+import re
 import importlib
 import random
 from decimal import Decimal
@@ -417,6 +418,10 @@ def test_printed_and_public_bill_from_the_app(client):
     token = client.get(f"/api/invoices/{inv['id']}/share", headers=h).json()["token"]
     public = client.get(f"/i/{token}").text
     assert "+91 XXXXXX0066" in public and "9811100066" not in public and "12 Mall Road" not in public
+    # a link preview in WhatsApp: the shop and amount, the bill number and date (no phone or address)
+    title = re.search(r'<meta property="og:title" content="([^"]*)">', public).group(1)
+    describe = re.search(r'<meta property="og:description" content="([^"]*)">', public).group(1)
+    assert " · ₹" in title and inv["invoice_number"] in describe and "0066" not in title + describe
 
 
 def test_bills_made_in_the_app_carry_hsn_per_line(client):

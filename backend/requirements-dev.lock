@@ -2883,6 +2883,10 @@ wsproto==1.3.2 \
     --hash=sha256:61eea322cdf56e8cc904bd3ad7573359a242ba65688716b0710a5eb12beab584 \
     --hash=sha256:b86885dcf294e15204919950f666e06ffc6c7c114ca900b060d6e16293528294
     # via simple-websocket
+xlsxwriter==3.3.1 \
+    --hash=sha256:0867761912cceac76f97ffa76eeda18c623ae9217f601be8512f55b1af4bdb6e \
+    --hash=sha256:8e2c89e59d733fe59e112317218c64fbbc276d90a8c144ebd6f7fa15e7ab184a
+    # via -r requirements.txt
 zope-event==6.2 \
     --hash=sha256:5e755153ac4faf64c10a4b6dd3307680166a3edf65b38df22df592610f8fa874 \
     --hash=sha256:b97d5d6327067ee6b9dfcbdf606ade9ade70991e19c162e808ea39e5fcf0f8d3
