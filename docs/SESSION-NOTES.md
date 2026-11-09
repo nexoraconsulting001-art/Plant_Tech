@@ -4,7 +4,16 @@ Hand-over notes so the next session can pick up without the old chat. No secrets
 passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters them. The standing rules and
 branch map are also in `CLAUDE.md` at the repo root.
 
-## Start here (8 Nov 2026)
+## Start here (9 Nov 2026)
+- **Production released, 9 Nov.** `main` = `staging` = aad471f (QA updated 21:36 IST, production 23:5x IST).
+  The first production attempt stopped at the migrations (0001's suppliers backfill: old single-shop purchases have
+  no `business_id`), nothing swapped. The owner then saved the old data (`~/.nurserypos/old-prod/old-prod-2026-11-09
+  .archive.gz`, 9 KB) and dropped production's `nurserypos` database (D15); the re-run applied 23 migrations on the
+  empty database, healthy, `/readyz` 200, a rollback image was kept (ALLOW_NO_ROLLBACK was not needed). The "App
+  build" button now exists (the workflow is on `main`). Next: the owner removes `ALLOW_NO_ROLLBACK=1`; the production
+  app build (prod-apk, after the owner's go); the move evening (`docs/PROD-RELEASE.md`, D).
+- CI on a Dependabot branch failed once by chance: `test_walk_visits_every_match_once_in_id_order` assumed generated
+  ObjectIds rise with insertion order (a counter wrap broke that); fixed in 0867031 (prod-ready only).
 - **Evening, 8 Nov: production release planned (owner approved).** Production gets this version, QA's data is
   copied into it exactly (pilot shops and the demo shop; "copy demo shop too"), the pilots move to the production
   app, builds come from `main`; sslip.io for now. The plan and the owner's steps: `docs/PROD-RELEASE.md`. Waiting

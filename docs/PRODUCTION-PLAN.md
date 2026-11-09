@@ -693,3 +693,12 @@ A code review of everything production would get (`main...prod-ready`) found 11 
   and fixed on the way (SESSION-NOTES, "Production release tools").
 - Waiting for the owner: production settings on the VM, GitHub production environment (reviewer, EXPO_TOKEN), EAS
   production variables, then "release".
+
+## Status update (9 Nov 2026): production released
+- `main` (production) and `staging` (QA) run the same version (aad471f). Production's old single-shop data stopped
+  the first deploy at the migrations (nothing swapped); the owner saved it and dropped it (D15 done), and the
+  re-run went live: 23 migrations, `/readyz` 200, settings check on production rules, production's own Claude key
+  and R2 bucket (`hara-hisaab-prod`). Production holds no shop data until the move evening, when QA's data is copied
+  in (`deploy/copy-qa-to-prod.sh`).
+- Next: production app (prod-apk) on the owner's go, the pilots' move, then backups for production (RUNBOOK 3),
+  notifications, Play Store, domain.

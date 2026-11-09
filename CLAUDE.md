@@ -10,10 +10,11 @@ line ~544); `docs/ROADMAP.md` is the order of work (open issues, then iOS, then 
 - `staging`: pushing it deploys the backend to QA (https://nurserypos-staging.140-238-251-141.sslip.io) through
   `.github/workflows/deploy.yml`. Push it only when the owner asks; bringing `prod-ready` into `staging` is an
   owner decision.
-- `main`: production (old single-shop version, 19ca6f3). Pushing it deploys production. **Do not touch** until the
-  owner explicitly asks for the production release. The release is planned (owner, 8 Nov): `docs/PROD-RELEASE.md`;
-  it waits for the owner's setup and their word "release". After it, `main` = `staging` = `prod-ready`.
-- GitHub's default branch is `main`, so a new session must check out `prod-ready`.
+- `main`: production. Released on 9 Nov 2026 (aad471f, the same server code as `staging`); production's data was
+  wiped (copy kept on the VM) and gets QA's data on the pilots' move evening (`docs/PROD-RELEASE.md`, step D).
+  Pushing it deploys production (after the owner's approval in GitHub): push it only when the owner asks for a
+  production release, never on your own.
+- GitHub's default branch is `main`; a new session still works on `prod-ready`.
 - Remote: `github.com/nexoraconsulting001-art/Plant_Tech`. The old `udyanojha/Nzone` remote is never pushed to.
 
 ## Standing rules from the owner
