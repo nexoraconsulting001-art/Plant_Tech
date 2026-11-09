@@ -22,6 +22,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from bson.regex import Regex
 from fastapi import APIRouter, Depends, HTTPException
@@ -44,23 +45,100 @@ logger = logging.getLogger(__name__)
 
 NAME_MAX = 80  # the admin's LibraryPatch allows the same
 ALIAS_MAX = 60
+ALIASES_MAX = 25  # other names per entry
+NAMES_VERSION = 2  # the name look-up's version (2: botanical and regional names, 10 Nov 2026); older entries are
+# looked up again by refresh_names
+NAMES_BATCH = 40  # entries looked up per hourly run
+NAMES_TRIES = 3  # look-ups without a usable answer before an entry is left alone (a day apart)
 CACHE_SECONDS = 30  # how stale another process's public entries can be
 VERSION_ID = "library:version"
 CANDIDATES = 300  # public entries ranked per search at most (exact matches are always among them)
 PRIVATE_LIMIT = 30
 FIELDS = {"_id": 0, "search_keys": 0}
 
+# The plants most Indian nurseries sell, with their Hindi name, botanical name and other common names (English,
+# Hinglish, older botanical names). Migration 1102 adds the ones a database lacks and merges new names into the
+# ones it has; the hourly name look-up (refresh_names) then adds what Claude knows.
 STARTER = [
-    ("Money Plant", "मनी प्लांट", "Epipremnum aureum", "Indoor Plants", ["pothos", "devil's ivy"]),
-    ("Snake Plant", "स्नेक प्लांट", "Dracaena trifasciata", "Indoor Plants", ["sansevieria", "mother-in-law's tongue"]),
-    ("Areca Palm", "सुपारी पाम", "Dypsis lutescens", "Indoor Plants", ["butterfly palm"]),
-    ("Peace Lily", "पीस लिली", "Spathiphyllum wallisii", "Indoor Plants", ["spathiphyllum"]),
-    ("Jade Plant", "जेड प्लांट", "Crassula ovata", "Succulents", ["crassula", "money tree"]),
-    ("Aloe Vera", "एलोवेरा", "Aloe vera", "Succulents", ["aloe", "ghritkumari", "gwarpatha"]),
-    ("Tulsi", "तुलसी", "Ocimum tenuiflorum", "Herbs", ["holy basil", "tulasi"]),
+    ("Money Plant", "मनी प्लांट", "Epipremnum aureum", "Indoor Plants", ["pothos", "golden pothos", "devil's ivy"]),
+    ("Snake Plant", "स्नेक प्लांट", "Dracaena trifasciata", "Indoor Plants",
+     ["sansevieria", "sansevieria trifasciata", "mother-in-law's tongue"]),
+    ("Areca Palm", "सुपारी पाम", "Dypsis lutescens", "Indoor Plants", ["butterfly palm", "golden cane palm", "areca"]),
+    ("Peace Lily", "पीस लिली", "Spathiphyllum wallisii", "Indoor Plants", ["spathiphyllum", "white sail plant"]),
+    ("Jade Plant", "जेड प्लांट", "Crassula ovata", "Succulents", ["crassula", "money tree", "kuber plant", "kubera plant"]),
+    ("Aloe Vera", "एलोवेरा", "Aloe vera", "Succulents", ["aloe", "ghritkumari", "gwarpatha", "ghee kunwar"]),
+    ("Tulsi", "तुलसी", "Ocimum tenuiflorum", "Herbs",
+     ["holy basil", "tulasi", "ocimum sanctum", "rama tulsi", "krishna tulsi"]),
     ("Rose", "गुलाब", "Rosa", "Flowering Plants", ["gulab", "rose plant"]),
-    ("Hibiscus", "गुड़हल", "Hibiscus rosa-sinensis", "Flowering Plants", ["gudhal", "china rose", "jaswand"]),
-    ("Spider Plant", "स्पाइडर प्लांट", "Chlorophytum comosum", "Indoor Plants", ["chlorophytum"]),
+    ("Hibiscus", "गुड़हल", "Hibiscus rosa-sinensis", "Flowering Plants", ["gudhal", "china rose", "jaswand", "jasud"]),
+    ("Spider Plant", "स्पाइडर प्लांट", "Chlorophytum comosum", "Indoor Plants", ["chlorophytum", "airplane plant"]),
+    ("Marigold", "गेंदा", "Tagetes erecta", "Flowering Plants",
+     ["genda", "gainda", "genda phool", "african marigold", "tagetes"]),
+    ("Mogra", "मोगरा", "Jasminum sambac", "Flowering Plants", ["arabian jasmine", "motia", "bela", "mogra jasmine"]),
+    ("Chameli", "चमेली", "Jasminum grandiflorum", "Flowering Plants", ["spanish jasmine", "royal jasmine", "jai"]),
+    ("Raat Ki Rani", "रात की रानी", "Cestrum nocturnum", "Flowering Plants",
+     ["raat rani", "night blooming jasmine", "lady of the night"]),
+    ("Parijat", "पारिजात", "Nyctanthes arbor-tristis", "Flowering Plants",
+     ["harsingar", "night jasmine", "shiuli", "coral jasmine"]),
+    ("Champa", "चंपा", "Plumeria rubra", "Flowering Plants", ["plumeria", "frangipani", "temple tree", "champa phool"]),
+    ("Kaner", "कनेर", "Nerium oleander", "Shrubs", ["oleander", "kaner phool"]),
+    ("Bougainvillea", "बोगनविलिया", "Bougainvillea glabra", "Flowering Plants",
+     ["kagaz phool", "paper flower", "booganvel"]),
+    ("Adenium", "एडेनियम", "Adenium obesum", "Succulents", ["desert rose"]),
+    ("Ixora", "इक्सोरा", "Ixora coccinea", "Flowering Plants", ["rugmini", "jungle geranium", "flame of the woods"]),
+    ("Croton", "क्रोटन", "Codiaeum variegatum", "Outdoor Plants", ["garden croton"]),
+    ("Aparajita", "अपराजिता", "Clitoria ternatea", "Flowering Plants", ["butterfly pea", "blue pea", "gokarna"]),
+    ("Curry Leaf", "कड़ी पत्ता", "Murraya koenigii", "Herbs", ["kadi patta", "curry patta", "meetha neem", "kari patta"]),
+    ("Mint", "पुदीना", "Mentha spicata", "Herbs", ["pudina", "spearmint"]),
+    ("Neem", "नीम", "Azadirachta indica", "Trees", ["neem tree", "margosa"]),
+    ("Ashoka Tree", "अशोक", "Polyalthia longifolia", "Trees", ["ashoka", "false ashoka", "mast tree", "asopalav"]),
+    ("Lemon Grass", "लेमन ग्रास", "Cymbopogon citratus", "Herbs", ["lemongrass", "hari chai", "gavati chaha"]),
+    ("Ajwain Plant", "अजवाइन", "Coleus amboinicus", "Herbs",
+     ["indian borage", "patharchur", "karpuravalli", "plectranthus amboinicus"]),
+    ("Stevia", "स्टीविया", "Stevia rebaudiana", "Herbs", ["meethi tulsi", "sweet leaf"]),
+    ("Giloy", "गिलोय", "Tinospora cordifolia", "Herbs", ["guduchi", "amrita"]),
+    ("Ashwagandha", "अश्वगंधा", "Withania somnifera", "Herbs", ["indian ginseng"]),
+    ("Brahmi", "ब्राह्मी", "Bacopa monnieri", "Herbs", ["bacopa", "water hyssop"]),
+    ("Insulin Plant", "इंसुलिन प्लांट", "Costus igneus", "Herbs", ["costus", "fiery costus"]),
+    ("Lemon", "नींबू", "Citrus limon", "Trees", ["nimbu", "lemon plant"]),
+    ("Guava", "अमरूद", "Psidium guajava", "Trees", ["amrood", "amrud", "peru"]),
+    ("Mango", "आम", "Mangifera indica", "Trees", ["aam", "mango plant"]),
+    ("Pomegranate", "अनार", "Punica granatum", "Trees", ["anar"]),
+    ("Papaya", "पपीता", "Carica papaya", "Trees", ["papita"]),
+    ("Chiku", "चीकू", "Manilkara zapota", "Trees", ["chikoo", "sapota", "sapodilla"]),
+    ("Jamun", "जामुन", "Syzygium cumini", "Trees", ["java plum", "black plum", "jambul"]),
+    ("Amla", "आंवला", "Phyllanthus emblica", "Trees", ["indian gooseberry", "aonla"]),
+    ("Bel", "बेल", "Aegle marmelos", "Trees", ["bael", "bilva", "wood apple"]),
+    ("Peepal", "पीपल", "Ficus religiosa", "Trees", ["pipal", "sacred fig", "bodhi tree"]),
+    ("Banyan", "बरगद", "Ficus benghalensis", "Trees", ["bargad", "vat vriksh"]),
+    ("Lucky Bamboo", "लकी बैम्बू", "Dracaena sanderiana", "Indoor Plants", ["bamboo plant", "lucky bamboo plant"]),
+    ("Rubber Plant", "रबर प्लांट", "Ficus elastica", "Indoor Plants", ["rubber tree", "india rubber plant"]),
+    ("ZZ Plant", "ज़ेड ज़ेड प्लांट", "Zamioculcas zamiifolia", "Indoor Plants", ["zamioculcas", "zanzibar gem"]),
+    ("Syngonium", "सिंगोनियम", "Syngonium podophyllum", "Indoor Plants", ["arrowhead plant", "arrowhead vine"]),
+    ("Fiddle Leaf Fig", "फिडल लीफ फिग", "Ficus lyrata", "Indoor Plants", ["fiddle leaf"]),
+    ("Monstera", "मॉन्स्टेरा", "Monstera deliciosa", "Indoor Plants", ["swiss cheese plant", "split leaf philodendron"]),
+    ("Dracaena Marginata", "ड्रेसीना", "Dracaena marginata", "Indoor Plants",
+     ["dragon tree", "madagascar dragon tree", "dracaena"]),
+    ("Aglaonema", "एग्लोनिमा", "Aglaonema commutatum", "Indoor Plants", ["chinese evergreen"]),
+    ("Boston Fern", "बोस्टन फर्न", "Nephrolepis exaltata", "Indoor Plants", ["fern", "sword fern"]),
+    ("Ficus Benjamina", "फाइकस", "Ficus benjamina", "Indoor Plants", ["weeping fig", "ficus", "benjamin fig"]),
+    ("Lady Palm", "लेडी पाम", "Rhapis excelsa", "Indoor Plants", ["rhapis palm", "rhapis"]),
+    ("Christmas Tree", "क्रिसमस ट्री", "Araucaria heterophylla", "Outdoor Plants", ["araucaria", "norfolk island pine"]),
+    ("Thuja", "मोरपंखी", "Platycladus orientalis", "Outdoor Plants", ["morpankhi", "golden cypress", "oriental arborvitae"]),
+    ("Kamini", "कामिनी", "Murraya paniculata", "Shrubs", ["orange jasmine", "mock orange"]),
+    ("Duranta", "डुरंटा", "Duranta erecta", "Shrubs", ["golden duranta", "sky flower"]),
+    ("Lantana", "लैंटाना", "Lantana camara", "Shrubs", ["raimuniya"]),
+    ("Tecoma", "टिकोमा", "Tecoma stans", "Flowering Plants", ["yellow bells", "yellow trumpet bush"]),
+    ("Vinca", "सदाबहार", "Catharanthus roseus", "Flowering Plants", ["sadabahar", "periwinkle", "nayantara"]),
+    ("Portulaca", "पोर्टुलाका", "Portulaca grandiflora", "Flowering Plants",
+     ["moss rose", "nau baje ka phool", "table rose"]),
+    ("Chrysanthemum", "गुलदाउदी", "Chrysanthemum morifolium", "Flowering Plants", ["guldaudi", "guldawari", "shevanti"]),
+    ("Petunia", "पेटूनिया", "Petunia hybrida", "Flowering Plants", []),
+    ("Dahlia", "डहलिया", "Dahlia pinnata", "Flowering Plants", []),
+    ("Sunflower", "सूरजमुखी", "Helianthus annuus", "Flowering Plants", ["surajmukhi"]),
+    ("Cactus", "कैक्टस", "Cactaceae", "Cacti", ["cacti", "nagphani"]),
+    ("Echeveria", "एचेवेरिया", "Echeveria elegans", "Succulents", []),
+    ("Haworthia", "हॉवर्थिया", "Haworthiopsis attenuata", "Succulents", ["zebra plant", "zebra haworthia"]),
 ]
 
 
@@ -228,7 +306,8 @@ async def _same_plant(db, name: str, business_id: str) -> dict | None:
     return None
 
 
-async def entry_for_new_product(db, name: str, category: str | None, business_id: str) -> str | None:
+async def entry_for_new_product(db, name: str, category: str | None, business_id: str,
+                                botanical: str = "") -> str | None:
     """Find the shared entry for a product name, or start one (private to this shop until an admin approves it)."""
     clean = clean_name(name)
     key = name_key(clean)
@@ -237,6 +316,8 @@ async def entry_for_new_product(db, name: str, category: str | None, business_id
     existing = await db.library.find_one({"name_key": key, "removed": False}, {"_id": 0, "id": 1})
     if not existing:  # the same plant under its Hindi or another common name ("गुलाब" is Rose)
         existing = await _same_plant(db, clean, business_id)
+    if not existing and len(name_key(botanical)) >= 3:  # or under its botanical name (a scan's "Ocimum sanctum")
+        existing = await _same_plant(db, clean_name(botanical, ALIAS_MAX), business_id)
     if existing:
         return existing["id"]
     entry = {"id": new_id(), "name": clean, "name_key": key, "name_hi": "", "botanical": "",
@@ -263,35 +344,105 @@ async def look_up_names(ctx, entry_id: str):
     await enrich(ctx["db"], entry_id)
 
 
-async def enrich(db, entry_id: str):
-    """Add the Hindi name, Hinglish spellings and other common names of a shop-made entry, so search finds it
-    in any language, and mark it hidden when it is not a nursery item (a hint for the admin; the AI never makes
-    an entry public). Not counted as a shop's scan."""
+def _names_version(entry: dict) -> int:
+    return entry.get("names_version", 1 if entry.get("enriched_at") else 0)
+
+
+async def enrich(db, entry_id: str) -> bool:
+    """Look up every name of an entry with Claude (ai_client.name_terms): its Hindi name, Hinglish and regional
+    spellings, other common and trade names, and its botanical names, so search finds it in any language and the
+    plant scan's stock list carries them. A shop-made entry that is not a nursery item is marked hidden (a hint
+    for the admin; the AI never makes an entry public), and one that turns out to be a plant another entry already
+    has (the same botanical name) is merged into it. Not counted as a shop's scan. True when it was looked up."""
     entry = await db.library.find_one({"id": entry_id}, {"_id": 0})
-    if not entry or entry.get("enriched_at"):
-        return
+    if not entry or entry.get("removed") or _names_version(entry) >= NAMES_VERSION:
+        return False
     try:
-        terms = await ai_client.name_terms(entry["name"])
-    except Exception as e:  # no names today; the backfill script can try again
+        terms = await ai_client.name_terms(entry["name"], entry.get("default_category") or "",
+                                           entry.get("botanical") or "")
+    except Exception as e:  # no names today; refresh_names tries again a day later (NAMES_TRIES in all)
         logger.warning("name look-up failed for %s: %s", entry["name"], e)
-        return
+        terms = None
     if terms is None:
-        return
-    extra = [clean_name(a, ALIAS_MAX) for a in [terms.english_name, *terms.hinglish, *terms.aliases]]
+        await db.library.update_one({"id": entry_id}, {"$set": {"names_tried_at": now_iso()},
+                                                       "$inc": {"names_tries": 1}})
+        return False
+    botanical = clean_name(terms.botanical_name, ALIAS_MAX)
+    extra = [clean_name(a, ALIAS_MAX) for a in [terms.english_name, *terms.hinglish, *terms.aliases,
+                                                 *terms.botanical_synonyms]]
+    if entry.get("botanical") and name_key(botanical) != name_key(entry["botanical"]):
+        extra.append(botanical)  # the accepted name next to an older one the entry has
+    own = {entry["name_key"], name_key(entry.get("botanical") or botanical)}
     aliases = list(dict.fromkeys(a for a in [*entry.get("aliases", []), *extra]
-                                 if len(name_key(a)) >= 2 and name_key(a) != entry["name_key"]))[:10]
-    update = {"aliases": aliases, "hidden": not terms.is_nursery_item, "enriched_at": now_iso()}
+                                 if len(name_key(a)) >= 2 and name_key(a) not in own))[:ALIASES_MAX]
+    update = {"aliases": aliases, "enriched_at": now_iso(), "names_version": NAMES_VERSION}
+    if entry.get("source") == "shop":
+        update["hidden"] = not terms.is_nursery_item
+    if not entry.get("botanical") and botanical:
+        update["botanical"] = botanical
     hindi = clean_name(terms.hindi_name)
     if not entry.get("name_hi") and hindi:
         update["name_hi"] = hindi
     was_public = is_public(entry)
-    if update["hidden"] and was_public and entry.get("source") == "shop" and not entry.get("approved_at"):
+    if update.get("hidden") and was_public and not entry.get("approved_at"):
         update["public"] = False  # an older shop entry that is not a nursery item: back to its own shop only
     update["search_keys"] = library_keys({**entry, **update})
     await db.library.update_one({"id": entry_id}, {"$set": update})
-    await refresh_products(db, entry_id)
-    if was_public:
+    merged_into = None if update.get("hidden") else await _merge_same_plant(db, {**entry, **update})
+    await refresh_products(db, merged_into or entry_id)
+    if was_public or merged_into:
         await changed(db)
+    return True
+
+
+async def _merge_same_plant(db, entry: dict) -> str | None:
+    """A shop-made entry with the same botanical name as another entry the shop can see ("Holy Basil Plant" and the
+    starter "Tulsi", both Ocimum tenuiflorum) joins it: its products move to that entry (so they carry its names
+    and picture) and it is marked removed (`merged_into`), as migration 0301 merges same-named entries. The one
+    kept: a starter entry, else a public one, else the older one. Returns the kept entry's id, or None."""
+    botanical = name_key(entry.get("botanical") or "")
+    if entry.get("source") != "shop" or len(botanical) < 3:
+        return None
+    pattern = Regex("^" + re.escape(entry["botanical"].strip()) + "$", "i")
+    rank = {"starter": 0}
+    others = [e for e in await db.library.find(
+        {"botanical": pattern, "removed": False, "id": {"$ne": entry["id"]}}, FIELDS).to_list(20)
+        if name_key(e.get("botanical") or "") == botanical
+        and (is_public(e) or e.get("source_business_id") == entry.get("source_business_id"))]
+    if not others:
+        return None
+    keep = min(others, key=lambda e: (rank.get(e.get("source"), 1), not is_public(e), e.get("created_at") or ""))
+    await db.products.update_many({"library_id": entry["id"]}, {"$set": {"library_id": keep["id"]}})
+    await db.library.update_one({"id": entry["id"]}, {"$set": {"removed": True, "merged_into": keep["id"],
+                                                               "updated_at": now_iso()}})
+    logger.info("library: %r merged into %r (both %s)", entry["name"], keep["name"], entry["botanical"])
+    return keep["id"]
+
+
+async def refresh_names(ctx):
+    """Hourly (worker.py): look up the names of up to NAMES_BATCH entries whose names are older than NAMES_VERSION,
+    starter and public ones first. Stops when AI_ENRICH_NAMES is off or the month's AI budget is reached."""
+    import ai_usage
+
+    if not get_settings().ai_enrich_names:
+        return 0
+    db = ctx["db"] if ctx and ctx.get("db") is not None else get_db()
+    day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    old = {"removed": False, "names_tries": {"$not": {"$gte": NAMES_TRIES}},
+           "$and": [{"$or": [{"names_version": {"$lt": NAMES_VERSION}}, {"names_version": {"$exists": False}}]},
+                    {"$or": [{"names_tried_at": {"$exists": False}}, {"names_tried_at": {"$lt": day_ago}}]}]}
+    todo = await db.library.find({**old, "public": True}, {"_id": 0, "id": 1}).sort("created_at", 1).to_list(NAMES_BATCH)
+    if len(todo) < NAMES_BATCH:
+        todo += await db.library.find({**old, "public": {"$ne": True}}, {"_id": 0, "id": 1}).sort(
+            "created_at", 1).to_list(NAMES_BATCH - len(todo))
+    done = 0
+    for e in todo:
+        if await ai_usage.over_budget(db):
+            break
+        done += await enrich(db, e["id"])
+    if done:
+        logger.info("refresh_names: looked up %s entries", done)
+    return done
 
 
 async def refresh_products(db, entry_id: str):

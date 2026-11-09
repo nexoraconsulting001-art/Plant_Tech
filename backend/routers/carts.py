@@ -1,6 +1,7 @@
 """Saved orders, one per customer: a worker can start Kavita's order, bill Rahul meanwhile, and Kavita's
-items are still there when anyone in the shop enters her number again. Not listed anywhere; making her
-bill or discarding her order removes it, and one untouched for 7 days is dropped.
+items are still there when anyone in the shop enters her number again. Making her bill or discarding her order
+removes it, and one untouched for 7 days is dropped. New order lists the ones saved today ("today's draft
+orders", GET /today; owner's ask, 10 Nov 2026), for everyone in the shop who can sell.
 
 A product line's unit is always the product's own (as on the bill), whatever the app sent: older apps send none,
 and the owner may change a product's unit while an order waits. Loose lines keep the unit they were added with.
@@ -16,12 +17,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import auth
+from common import now_ist
 from db import get_db
 from fast_json import respond
 from units import check_quantity, unit_of
 
 router = APIRouter(prefix="/api/orders/cart", tags=["orders"])
 KEEP_DAYS = 7
+TODAY_MAX = 50  # drafts listed on New order
+CUSTOMER_FIELDS = {"_id": 0, "id": 1, "name": 1, "phone": 1, "purchase_count": 1, "last_purchase_at": 1}
 MAX_QTY = 100_000
 MAX_PRICE = 10_000_000  # a unit price; sales.py and purchases.py use the same caps
 
@@ -88,6 +92,34 @@ async def get_cart(customer_id: str = Query(min_length=1, max_length=64), user: 
     items = [{**i, "unit": units[i["product_id"]]} if i.get("product_id") in units else i for i in items]
     return respond({"items": items, "discount": c.get("discount", 0), "gst_removed": c.get("gst_removed", False),
                     "updated_at": updated.isoformat()})
+
+
+@router.get("/today")
+async def today_drafts(user: dict = Depends(auth.require("sell"))):
+    """The shop's orders saved since midnight in India and not billed or discarded, newest first: the customer
+    (as customers/find gives it, so the app opens the order the usual way), how many lines, the total before GST
+    changes (lines at their order price, less the discount) and who saved it last. Erased customers are left out."""
+    db = get_db()
+    bid = user["business_id"]
+    midnight = now_ist().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    carts = await (db.carts.find({"business_id": bid, "saved_at": {"$gte": midnight}},
+                                 {"_id": 0, "customer_id": 1, "items": 1, "discount": 1, "updated_at": 1,
+                                  "updated_by": 1})
+                   .sort("saved_at", -1).limit(TODAY_MAX).to_list(TODAY_MAX))
+    ids = [c["customer_id"] for c in carts]
+    customers = {c["id"]: c for c in await db.customers.find(
+        {"business_id": bid, "id": {"$in": ids}, "erased_at": None}, CUSTOMER_FIELDS).to_list(len(ids) or 1)}
+    out = []
+    for c in carts:
+        customer = customers.get(c["customer_id"])
+        items = c.get("items") or []
+        if not customer or not items:
+            continue
+        gross = sum(float(i.get("price") or 0) * float(i.get("quantity") or 0) for i in items)
+        out.append({"customer": customer, "lines": len(items), "total": round(max(0.0, gross - float(c.get("discount") or 0)), 2),
+                    "updated_at": _when(c["updated_at"]).isoformat(),
+                    "updated_by": (c.get("updated_by") or {}).get("name", "")})
+    return respond(out)
 
 
 @router.put("")

@@ -34,7 +34,7 @@ import observability
 import push
 import retention
 from common import IST
-from routers import account, exports
+from routers import account, exports, library
 from settings import check
 
 JOB_MODULES: list[str] = ["push", "notify", "routers.library", "routers.files", "routers.exports", "retention",
@@ -107,6 +107,7 @@ class WorkerSettings:
         cron(retention.apply_retention, hour=3, minute=0, unique=True, timeout=1800),
         cron(exports.purge_exports, hour=3, minute=15, unique=True, timeout=1800),
         cron(erase_due_shops, hour=3, minute=30, unique=True, timeout=ERASE_TIMEOUT),
+        cron(library.refresh_names, minute=17, unique=True, timeout=1800),  # hourly: plant names (library.py)
     ]
     on_startup = startup
     on_shutdown = shutdown

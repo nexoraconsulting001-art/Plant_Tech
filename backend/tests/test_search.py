@@ -273,7 +273,8 @@ def test_paged_list_and_counts(client):
     assert [p["name"] for p in low["items"]] == ["Begonia", "Cactus", "Echeveria", "Fern"]
     assert low["next_cursor"] is None
     found = shop.get("/api/products", params={"limit": 2, "search": "e"}).json()
-    assert [p["name"] for p in found["items"]] == ["Echeveria"] and found["next_cursor"] is None
+    # Fern too: it is the starter Boston Fern (Nephrolepis exaltata), found by its botanical name
+    assert [p["name"] for p in found["items"]] == ["Echeveria", "Fern"] and found["next_cursor"] is None
     assert shop.get("/api/products", params={"cursor": "not-a-cursor"}).status_code == 400
     assert shop.get("/api/products", params={"limit": 500}).status_code == 422
     assert shop.get("/api/products/counts").json() == {"all": 7, "low": 2, "out": 2, "below": 1}

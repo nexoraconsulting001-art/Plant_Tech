@@ -39,6 +39,7 @@ from pydantic import BaseModel, ValidationError
 
 import ai_guard
 import ai_usage
+from common import name_key
 from settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,10 @@ SYSTEM_PLANT = (
     "likely first; empty when none.\n"
     "Always prefer a listed product's name for the same plant over another name for it."
 )
-STOCK_HEAD = "The shop's own products, one per line (botanical name in brackets where known):"
+STOCK_HEAD = ("The shop's own products, one per line (in brackets where known: the botanical name, and after "
+              "'also:' other names of the same plant or product):")
+STOCK_OTHER_NAMES = 6  # other names per product line
+STOCK_NAME_CHARS = 40
 STOCK_NONE = "The shop has no products yet: leave stock_match and stock_alternatives empty."
 SYSTEM_INVOICE = (
     "You are an OCR and data extraction assistant for a plant nursery in India. You extract supplier "
@@ -146,13 +150,17 @@ SYSTEM_INVOICE = (
     "purchase_price is the per-unit cost (divide the line amount by quantity if only the amount is printed)"
 )
 SYSTEM_NAMES = (
-    "You are an expert on plants and garden products sold in Indian nurseries. You give the names people use "
-    "for an item in English and in Hindi (Devanagari and Hinglish).\n\n"
+    "You are an expert on plants and garden products sold in Indian nurseries. You list every name people use "
+    "for an item, so a shop can find it, and recognise it in a photo, under any of them.\n\n"
     f"- is_nursery_item: true if it is a plant or something a plant nursery sells ({NURSERY_GOODS}); false otherwise\n"
     "- english_name: its common English name\n"
     "- hindi_name: its common Hindi name in Devanagari, or empty string if it has none\n"
-    "- hinglish: up to 3 ways people write the Hindi name in Latin letters\n"
-    "- aliases: up to 3 other common names (English or regional)"
+    "- hinglish: up to 5 ways people write its Hindi or regional names in Latin letters (e.g. genda, gainda)\n"
+    "- aliases: up to 10 other names used in India for the same plant or product: English, trade and nursery "
+    "names, and names in other Indian languages written in Latin letters; never the name of a different plant\n"
+    "- botanical_name: the accepted botanical name of a plant (genus and species where known); empty for a product\n"
+    "- botanical_synonyms: up to 3 older or other botanical names of the same plant (e.g. Ocimum sanctum for "
+    "Ocimum tenuiflorum); empty when none"
 )
 
 
@@ -174,6 +182,8 @@ class NameTerms(BaseModel):
     hindi_name: str
     hinglish: List[str]
     aliases: List[str]
+    botanical_name: str
+    botanical_synonyms: List[str]
 
 
 class InvoiceItem(BaseModel):
@@ -428,11 +438,26 @@ async def _ask(kind: str, system: str, prompt: str, images: list[bytes], schema,
     return parsed
 
 
+def _stock_line(p: dict) -> str:
+    """"- Tulsi (Ocimum tenuiflorum; also: Holy Basil, तुलसी, tulasi)": the name, the botanical name, and a few other
+    names of the same plant (`also`: the product's own other names first, then its shared entry's)."""
+    name = p["name"].strip()
+    botanical = (p.get("botanical_name") or "").strip()
+    seen = {name_key(name), name_key(botanical)}
+    also = []
+    for n in p.get("also") or []:
+        n = (n or "").strip()[:STOCK_NAME_CHARS].strip()
+        if n and name_key(n) not in seen:
+            seen.add(name_key(n))
+            also.append(n)
+    inside = "; ".join(x for x in (botanical, ("also: " + ", ".join(also[:STOCK_OTHER_NAMES])) if also else "") if x)
+    return f"- {name}" + (f" ({inside})" if inside else "")
+
+
 def stock_context(stock: list[dict] | None) -> str:
-    """The shop's products for the prompt: one "- name (botanical)" line each, sorted, so the same stock gives the
-    same bytes (cached) and the same list order for Claude on every scan."""
-    lines = sorted({f"- {p['name'].strip()}" + (f" ({p['botanical_name'].strip()})" if (p.get("botanical_name") or "").strip()
-                    else "") for p in stock or [] if (p.get("name") or "").strip()}, key=str.lower)
+    """The shop's products for the prompt: one line each (_stock_line), sorted, so the same stock gives the same
+    bytes (cached) and the same list order for Claude on every scan."""
+    lines = sorted({_stock_line(p) for p in stock or [] if (p.get("name") or "").strip()}, key=str.lower)
     if not lines:
         return STOCK_NONE
     return STOCK_HEAD + "\n" + "\n".join(lines[:MAX_STOCK_NAMES])
@@ -514,10 +539,13 @@ async def scan_invoice(images: list[bytes], shop_name: str = "", normalised: boo
     }
 
 
-async def name_terms(name: str) -> NameTerms | None:
-    """The other names of a product a shop typed (for search in any language); None if Claude gave no usable answer."""
-    prompt = f"An Indian plant nursery added a product called {name!r}."
+async def name_terms(name: str, category: str = "", botanical: str = "") -> NameTerms | None:
+    """Every name of an item a nursery sells (search in any language, and the plant scan's stock list), with its
+    botanical names; None if Claude gave no usable answer."""
+    known = f" (botanical name {botanical!r})" if botanical.strip() else ""
+    where = f" in its category {category!r}" if category.strip() else ""
+    prompt = f"An Indian plant nursery sells an item called {name!r}{known}{where}."
     try:
-        return await _ask("names", SYSTEM_NAMES, prompt, [], NameTerms, "low", 600)
+        return await _ask("names", SYSTEM_NAMES, prompt, [], NameTerms, "low", 1200)
     except Truncated:
         return None

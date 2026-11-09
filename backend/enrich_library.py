@@ -1,5 +1,6 @@
-"""Look up the Hindi and other common names of shared catalogue entries that shops created, so search finds
-them in any language (new entries get this automatically). Entries already looked up are skipped.
+"""Look up every name of shared catalogue entries now (Hindi, Hinglish, regional, trade and botanical names), so
+search and the plant scan find them in any language. The worker does this by itself every hour (library.
+refresh_names, NAMES_BATCH at a time); this runs it at once. Entries already looked up at NAMES_VERSION are skipped.
 
 On the VM: docker compose exec web python enrich_library.py --limit 50
 """
@@ -18,12 +19,15 @@ from routers import library  # noqa: E402
 
 async def run(limit: int) -> int:
     db = get_db()
-    todo = await db.library.find({"removed": False, "source": "shop", "enriched_at": None},
+    todo = await db.library.find({"removed": False, "$or": [{"names_version": {"$lt": library.NAMES_VERSION}},
+                                                             {"names_version": {"$exists": False}}]},
                                  {"_id": 0, "id": 1, "name": 1}).to_list(limit)
+    done = 0
     for e in todo:
-        await library.enrich(db, e["id"])
-        print("looked up:", e["name"], flush=True)
-    return len(todo)
+        ok = await library.enrich(db, e["id"])
+        done += ok
+        print("looked up:" if ok else "no answer:", e["name"], flush=True)
+    return done
 
 
 def main():

@@ -33,14 +33,15 @@ from routers import suppliers
 from routers.products import views
 from routers.purchases import MAX_PAGES
 from routers.suppliers import clean_gstin, supplier_key
-from search import best_product
+from search import best_product, product_names
 from settings import get_settings
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 logger = logging.getLogger(__name__)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 SCAN = "scan"  # the allowance plant photos and bill pages share
-NAME_FIELDS = {"_id": 0, "id": 1, "name": 1, "botanical_name": 1}  # all that best_product reads
+NAME_FIELDS = {"_id": 0, "id": 1, "name": 1, "botanical_name": 1, "other_names": 1, "library_id": 1}
+ENTRY_NAMES = {"_id": 0, "id": 1, "name": 1, "name_hi": 1, "botanical": 1, "aliases": 1}
 RECOMMENDED = 4  # "in your stock" products shown with a scan's result
 
 
@@ -97,6 +98,39 @@ async def _run(db, business_id: str, n: int, period: str, call):
         raise err
 
 
+async def _stock(db, bid: str):
+    """The shop's products with every name they have (search.product_names: own name, botanical name, the owner's
+    other names, the shared entry's English, Hindi, botanical and other names), for matching what Claude or a bill
+    read, and for the stock list Claude sees (each product's `also`). Returns (products, names_of)."""
+    stock = await db.products.find({"business_id": bid, "deleted_at": None}, NAME_FIELDS).to_list(5000)
+    ids = list({p["library_id"] for p in stock if p.get("library_id")})
+    entries = {e["id"]: e for e in await db.library.find({"id": {"$in": ids}, "removed": False},
+                                                          ENTRY_NAMES).to_list(len(ids) or 1)} if ids else {}
+    names = {p["id"]: product_names(p, entries.get(p.get("library_id"))) for p in stock}
+    for p in stock:
+        entry = entries.get(p.get("library_id")) or {}
+        if not (p.get("botanical_name") or "").strip() and entry.get("botanical"):
+            p["botanical_name"] = entry["botanical"]  # the list Claude sees names the plant botanically
+        p["also"] = names[p["id"]][1:]
+    return stock, lambda p: names[p["id"]]
+
+
+def _name_index(stock: list[dict], names_of) -> dict[str, dict]:
+    """name key -> product, for a name Claude copied from the list: every product's own name, and any other name
+    that only one product has (two products of the same plant share their other names: those need the own name)."""
+    index: dict[str, dict] = {}
+    for p in stock:
+        index.setdefault(name_key(p["name"]), p)
+    others: dict[str, dict[str, dict]] = {}
+    for p in stock:
+        for n in names_of(p)[1:]:
+            others.setdefault(name_key(n), {})[p["id"]] = p
+    for k, ps in others.items():
+        if k and k not in index and len(ps) == 1:
+            index[k] = next(iter(ps.values()))
+    return index
+
+
 def _listed(by_key: dict[str, dict], name: str) -> dict | None:
     """The shop's product Claude copied from its list (name_key: case and spaces do not matter), or None for a
     name that is not one of them (Claude must never invent a product)."""
@@ -138,7 +172,7 @@ async def identify(body: ImagePayload, user: dict = Depends(auth.require("sell",
         raise HTTPException(400, str(e))
     hours = photo_memory_hours()
     memory_key = f"{bid}:{hashlib.sha256(image).hexdigest()}"
-    stock = await db.products.find({"business_id": bid, "deleted_at": None}, NAME_FIELDS).to_list(5000)
+    stock, names_of = await _stock(db, bid)
     cats = await db.categories.find({"business_id": bid}, {"_id": 0}).to_list(500)
     result = await _remembered(db, memory_key) if hours else None
     if result is None:
@@ -160,13 +194,11 @@ async def identify(body: ImagePayload, user: dict = Depends(auth.require("sell",
         raise AppError(422, "This item could not be identified. Please retake the photo in good light, "
                             "or search by name.", "not_identified")
 
-    by_key: dict[str, dict] = {}
-    for p in stock:
-        by_key.setdefault(name_key(p["name"]), p)
+    by_key = _name_index(stock, names_of)
     chosen = _listed(by_key, result.get("stock_match") or "")
     chosen_also = [p for n in result.get("stock_alternatives") or [] if (p := _listed(by_key, n))]
     names = [n for n in (result["plant_name"], result["scientific_name"], *result["alternatives"]) if n]
-    matched, similar = best_product(stock, names)
+    matched, similar = best_product(stock, names, names_of)  # any name of a product: "Holy Basil" is "Tulsi"
     matched = chosen or matched  # Claude saw the photo and the list: its choice wins over a name comparison
     found: list[dict] = []
     for n in names[:4]:  # the shop's search, whole names only: Hindi, Hinglish and catalogue names too
@@ -261,9 +293,9 @@ async def scan_invoice(body: InvoicePayload, user: dict = Depends(auth.require("
         raise refusal
     for k in ("is_bill", "reason", "pages", "same_supplier", "same_bill"):
         result.pop(k)
-    products = await db.products.find({"business_id": bid, "deleted_at": None}, NAME_FIELDS).to_list(5000)
+    products, names_of = await _stock(db, bid)
     for it in result["items"]:
-        match, _ = best_product(products, [it["name"]])
+        match, _ = best_product(products, [it["name"]], names_of)
         it["product_id"] = match["id"] if match else None
         it["matched_name"] = match["name"] if match else None
     found = await suppliers.find_match(db, bid, result["supplier"], result["supplier_phone"], result["supplier_gstin"])

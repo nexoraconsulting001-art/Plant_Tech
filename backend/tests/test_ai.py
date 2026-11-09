@@ -105,7 +105,9 @@ def test_fixed_instructions_then_the_shops_stock_list(client, fake, monkeypatch)
     shop.product("Money Plant", 250, 10, botanical_name="Epipremnum aureum")
     assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).status_code == 200
     _, body = fake[-1]
-    stock = ai_client.STOCK_HEAD + "\n- Money Plant (Epipremnum aureum)\n- Zamioculcas Special"
+    # each product with its botanical name and other names of the same plant (here the starter entry's)
+    stock = (ai_client.STOCK_HEAD + "\n- Money Plant (Epipremnum aureum; also: मनी प्लांट, pothos, golden pothos, "
+             "devil's ivy)\n- Zamioculcas Special")
     # instructions + list are past the model's cache minimum: the mark at the end caches both for this shop
     assert body["system"] == [{"type": "text", "text": ai_client.SYSTEM_PLANT},
                               {"type": "text", "text": stock, "cache_control": {"type": "ephemeral"}}]
@@ -153,15 +155,15 @@ def test_claudes_choice_from_the_stock_list_wins_and_is_checked(client, fake):
     assert shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()["matched_product"]["id"] == snake["id"]
 
 
-def test_names_in_other_languages_are_recommended_from_stock(client, fake):
-    """No exact match, but the shop's search knows the plant under another name: shown as "in your stock"."""
+def test_names_in_other_languages_match_the_shops_product(client, fake):
+    """Claude names the plant in Hindi; the shop sells it as Rose (the shared entry knows gulab): that's the match,
+    no longer only a recommendation (owner, 10 Nov 2026)."""
     shop = Shop(client)
     rose = shop.product("Rose", 120, 6)
     fake.reply = _plant(plant_name="Gulab", scientific_name="", alternatives=[], stock_match="", stock_alternatives=[])
     r = shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).json()
-    assert r["matched_product"] is None
-    assert [p["id"] for p in r["recommended_products"]] == [rose["id"]]
-    assert [p["id"] for p in r["similar_products"]] == [rose["id"]]  # older apps show it too
+    assert r["matched_product"]["id"] == rose["id"]
+    assert r["recommended_products"] == [] and r["similar_products"] == []
 
 
 def test_the_same_photo_is_answered_from_memory(client, fake, monkeypatch):

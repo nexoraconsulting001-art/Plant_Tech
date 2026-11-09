@@ -34,9 +34,24 @@ SKU_TRIES = 5
 LOW = {"$expr": {"$lte": [{"$ifNull": ["$stock", 0]}, {"$ifNull": ["$min_stock", 0]}]}}  # as view()'s low_stock
 
 
+OTHER_NAMES_MAX = 10  # names the owner gives a product besides its name ("Genda" for Marigold)
+
+
+def clean_other_names(names: list[str], name: str = "") -> list[str]:
+    """Other names as stored: cleaned like shared names, no duplicates, not the product's own name."""
+    out, seen = [], {name_key(name)}
+    for n in names:
+        n = library.clean_name(n, library.ALIAS_MAX)
+        if len(name_key(n)) >= 2 and name_key(n) not in seen:
+            seen.add(name_key(n))
+            out.append(n)
+    return out[:OTHER_NAMES_MAX]
+
+
 class ProductIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     botanical_name: str = Field("", max_length=120)
+    other_names: list[str] = Field(default_factory=list, max_length=OTHER_NAMES_MAX)
     category_id: str | None = None
     library_id: str | None = None
     photo_path: str | None = None
@@ -52,6 +67,7 @@ class ProductIn(BaseModel):
 class ProductPatch(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=120)
     botanical_name: str | None = Field(None, max_length=120)
+    other_names: list[str] | None = Field(None, max_length=OTHER_NAMES_MAX)
     category_id: str | None = None
     photo_path: str | None = None
     selling_price: float | None = Field(None, ge=0)
@@ -80,6 +96,7 @@ def view(p: dict, cats: dict, lib: dict, gst_registered: bool, user: dict) -> di
     library_image = library.picture_for(entry, user["business_id"])
     v = {
         "id": p["id"], "sku": p.get("sku", ""), "name": p["name"], "botanical_name": p.get("botanical_name", ""),
+        "other_names": p.get("other_names") or [],
         "category_id": p.get("category_id"), "category": cat.get("name", ""),
         "gst_percent": cat.get("gst_percent", 0) if gst_registered else 0,
         "selling_price": p.get("selling_price", 0), "unit": unit_of(p.get("unit")),
@@ -245,13 +262,14 @@ async def create_product(body: ProductIn, user: dict = Depends(auth.require("sto
     cat = await db.categories.find_one({"id": category_id}, {"_id": 0}) if category_id else None
     if not library_id:
         library_id = await library.entry_for_new_product(db, body.name, cat["name"] if cat else None,
-                                                         user["business_id"])
+                                                         user["business_id"], body.botanical_name)
         if library_id:
             entry = await db.library.find_one({"id": library_id}, library.FIELDS)
     unit = "pcs" if is_plant_category((cat or {}).get("name")) else body.unit
     doc = await insert_product(db, {
         "id": new_id(), "business_id": user["business_id"],
-        "name": body.name.strip(), "botanical_name": body.botanical_name.strip(), "category_id": category_id,
+        "name": body.name.strip(), "botanical_name": body.botanical_name.strip(),
+        "other_names": clean_other_names(body.other_names, body.name), "category_id": category_id,
         "library_id": library_id, "photo_path": body.photo_path, "selling_price": body.selling_price,
         "cost_price": body.cost_price if auth.can(user, "owner") else 0, "stock": body.stock,
         "min_stock": body.min_stock, "supplier": body.supplier.strip(), "notes": body.notes.strip(), "unit": unit,
@@ -286,7 +304,9 @@ async def update_product(product_id: str, body: ProductPatch, user: dict = Depen
     for k in ("name", "botanical_name", "supplier", "notes"):
         if k in update:
             update[k] = update[k].strip()
-    if "name" in update or "botanical_name" in update:  # found by its new name from now on
+    if "other_names" in update:
+        update["other_names"] = clean_other_names(update["other_names"], update.get("name", p["name"]))
+    if {"name", "botanical_name", "other_names"} & update.keys():  # found by its new names from now on
         keyed = await catalog_search.with_keys(db, {**p, **update})
         update.update(own_keys=keyed["own_keys"], search_keys=keyed["search_keys"])
     update["updated_at"] = now_iso()

@@ -5,6 +5,7 @@ turned into Latin letters, then both sides are reduced to a rough sound-alike fo
 names uses whole words, never parts of words: "Pot" is not "Pothos" and "Rose" is not "Primrose".
 """
 import re
+from collections.abc import Callable
 from functools import lru_cache
 
 from common import name_key
@@ -136,8 +137,18 @@ def library_terms(entry: dict | None) -> list[str]:
 
 
 def product_terms(product: dict, entry: dict | None = None) -> list[str]:
-    """A product is found by its own name, botanical name and code, and by its shared entry's other names."""
-    return [product["name"], product.get("botanical_name", ""), product.get("sku", ""), *library_terms(entry)]
+    """A product is found by its own name, botanical name and code, the other names the owner gave it, and its
+    shared entry's names."""
+    return [product["name"], product.get("botanical_name", ""), product.get("sku", ""),
+            *(product.get("other_names") or []), *library_terms(entry)]
+
+
+def product_names(product: dict, entry: dict | None = None) -> list[str]:
+    """Every name of a product for matching what Claude or a bill read: its own name first, then its botanical
+    name, the owner's other names and its shared entry's names (English, Hindi, botanical, aliases)."""
+    names = [product["name"], product.get("botanical_name") or "", *(product.get("other_names") or []),
+             *library_terms(entry)]
+    return list(dict.fromkeys(n.strip() for n in names if n and n.strip()))
 
 
 # ---- search keys: typed search through a database index ----------------------------------------------
@@ -188,7 +199,8 @@ def library_keys(entry: dict) -> list[str]:
 
 def product_keys(product: dict, entry: dict | None) -> tuple[list[str], list[str]]:
     """(own_keys, search_keys) of a product: its own names, plus its shared entry's names (as other names)."""
-    own = keys_of([product["name"], product.get("botanical_name", ""), product.get("sku", "")])
+    own = keys_of([product["name"], product.get("botanical_name", ""), product.get("sku", ""),
+                   *(product.get("other_names") or [])])
     return own, sorted(set(own) | set(keys_of(library_terms(entry), first_is_own=False)))
 
 
@@ -222,10 +234,14 @@ def words(text: str | None) -> set[str]:
             if w not in GENERIC and not w.isdigit()}
 
 
-def _score(names_words: list[set[str]], product: dict) -> float:
+def _default_names(product: dict) -> list[str]:
+    return [product["name"], product.get("botanical_name") or ""]
+
+
+def _score(names_words: list[set[str]], product_words: list[set[str]]) -> float:
     """2 + overlap when one side's words all appear in the other, else the plain overlap (0..1)."""
     best = 0.0
-    for pw in (words(product["name"]), words(product.get("botanical_name"))):
+    for pw in product_words:
         if not pw:
             continue
         for qw in names_words:
@@ -236,17 +252,48 @@ def _score(names_words: list[set[str]], product: dict) -> float:
     return best
 
 
-def best_product(products: list[dict], names: list[str]) -> tuple[dict | None, list[dict]]:
-    """The one product these names mean (or None), and up to 3 other close products."""
+def _same_name(query_forms_: set[tuple[str, str]], term: str) -> bool:
+    """The same name in another spelling or script: equal name keys, or equal sound-alike forms of 4+ letters."""
+    tk, tp = forms_of(term)
+    return any(tk == qk or (len(tp) >= 4 and tp == qp) for qk, qp in query_forms_ if tk)
+
+
+def best_product(products: list[dict], names: list[str],
+                 names_of: Callable[[dict], list[str]] | None = None) -> tuple[dict | None, list[dict]]:
+    """The one product these names mean (or None), and up to 3 other close products.
+
+    `names_of(product)`: every name of a product, its own name first (default: name and botanical name;
+    product_names adds the owner's other names and the shared entry's names). In order:
+    1. a product whose own name is one of the names;
+    2. exactly one product with one of the names among its other names, in any spelling or script ("Holy Basil"
+       or "Ocimum sanctum" is the shop's "Tulsi", "genda" its "Marigold"); when several have it (the same plant
+       under two products), none is chosen and they come first among the close ones;
+    3. a product whose names contain all the words (or the reverse), clearly better than the next one.
+    """
+    names_of = names_of or _default_names
     names = [n for n in names if n and n.strip()]
     keys = {name_key(n) for n in names} - {""}
-    for p in products:  # exact name or botanical name
-        if name_key(p["name"]) in keys or (p.get("botanical_name") and name_key(p["botanical_name"]) in keys):
+    for p in products:  # its own name
+        if name_key(p["name"]) in keys:
             return p, []
+    forms = {forms_of(n) for n in names} - {("", "")}
+    named = [p for p in products if any(_same_name(forms, t) for t in names_of(p)[1:])]
+    if len(named) == 1:
+        return named[0], []
     names_words = [words(n) for n in names]
-    scored = sorted(((s, p) for p in products if (s := _score(names_words, p)) > 0), key=lambda sp: -sp[0])
+    scored = sorted(((s, p) for p in products if (s := _score(names_words, [words(t) for t in names_of(p)])) > 0),
+                    key=lambda sp: -sp[0])
     match = None
-    if scored and scored[0][0] >= 2 and (len(scored) == 1 or scored[1][0] < scored[0][0]):
+    if not named and scored and scored[0][0] >= 2 and (len(scored) == 1 or scored[1][0] < scored[0][0]):
         match = scored[0][1]  # all words contained, and clearly the best
-    similar = [p for s, p in scored if p is not match and s >= 0.3][:3]  # e.g. one of two words shared
-    return match, similar
+    similar = _unique([*named, *(p for s, p in scored if p is not match and s >= 0.3)])  # e.g. one of two words
+    return match, similar[:3]
+
+
+def _unique(products: list[dict]) -> list[dict]:
+    seen, out = set(), []
+    for p in products:
+        if p["id"] not in seen:
+            seen.add(p["id"])
+            out.append(p)
+    return out

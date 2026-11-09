@@ -1,5 +1,6 @@
 """Products, stock, categories with GST, and the shared picture library."""
 from conftest import Shop, photo_b64, run
+from routers import library
 
 
 def test_starter_library_and_suggestions(client):
@@ -75,7 +76,7 @@ def test_admin_library_needs_admin(client):
     assert shop.get("/api/admin/library").status_code == 403
     admin = Shop(client, phone="9000000001", name="Admin", admin=True)
     entries = admin.get("/api/admin/library", params={"status": "none"}).json()
-    assert len(entries) == 10
+    assert len(entries) == len(library.STARTER)
     eid = entries[0]["id"]
     r = admin.post(f"/api/admin/library/{eid}/photo", {"image_base64": photo_b64()})
     assert r.json()["image_status"] == "live"
@@ -129,7 +130,8 @@ def test_name_enrichment_updates_terms_and_hides_non_nursery(client, claude):
     assert entry["name_hi"] == "तुलसी" and "tulsi" in entry["aliases"] and entry["hidden"] is False
     assert b.get("/api/products/suggest", params={"q": "tulsi"}).json()["library"]  # found by its new names
 
-    claude.names = {**claude.names, "is_nursery_item": False, "hindi_name": "", "hinglish": [], "aliases": []}
+    claude.names = {**claude.names, "is_nursery_item": False, "hindi_name": "", "hinglish": [], "aliases": [],
+                    "botanical_name": "", "botanical_synonyms": []}
     q = a.post("/api/products", {"name": "Dell Laptop Stand", "selling_price": 900}).json()
     run(library.enrich(db, q["library_id"]))
     assert b.get("/api/products/suggest", params={"q": "dell laptop"}).json()["library"] == []  # hidden from other shops

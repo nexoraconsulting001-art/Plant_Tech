@@ -58,7 +58,8 @@ DEFAULTS = {
                 "supplier": "Green Valley Growers", "supplier_phone": "98100 12345",
                 "supplier_address": "Sohna Road, Gurugram", "supplier_gstin": "", "invoice_number": "GV-12",
                 "date": "12/10/2026", "total": 1250, "items": [{"name": "Snake Plant", "quantity": 5, "purchase_price": 200}]},
-    "names": {"is_nursery_item": True, "english_name": "", "hindi_name": "", "hinglish": [], "aliases": []},
+    "names": {"is_nursery_item": True, "english_name": "", "hindi_name": "", "hinglish": [], "aliases": [],
+              "botanical_name": "", "botanical_synonyms": []},
 }
 KIND = {ai_client.SYSTEM_PLANT: "plant", ai_client.SYSTEM_INVOICE: "invoice", ai_client.SYSTEM_NAMES: "names"}
 
