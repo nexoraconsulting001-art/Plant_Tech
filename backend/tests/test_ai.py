@@ -503,7 +503,9 @@ async def _indexes():
 
 
 def test_per_user_rate_limit(client, fake, monkeypatch):
-    monkeypatch.setenv("AI_USER_RATE", "2/minute")
+    # a day, not a minute: with "2/minute" a run crossing a minute boundary (16:15:59 -> 16:16:00 on 10 Nov, the
+    # production app build's checks) started a new window and let the fourth request through
+    monkeypatch.setenv("AI_USER_RATE", "2/day")
     shop = Shop(client)
     codes = [shop.post("/api/ai/identify-plant", {"image_base64": photo_b64()}).status_code for _ in range(3)]
     assert codes == [200, 200, 429]
