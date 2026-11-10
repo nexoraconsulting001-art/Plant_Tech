@@ -5,6 +5,13 @@ passwords live only in the VM's `deploy/.env` and in EAS, and the owner enters t
 branch map are also in `CLAUDE.md` at the repo root.
 
 ## Start here (10 Nov 2026)
+- **Released, 10 Nov 2026 (owner's go, 13:42 IST):** `prod-ready` 550e93b pushed to `staging` and `main`. QA live
+  13:51 IST (deploy green, /readyz ok, 68 routes incl. /orders/cart/today, /ai/scan-order, /reports/sales/export,
+  401 without login); production live 13:53 IST after the owner's approval (deploy green, /readyz ok, the new routes
+  answer 401 without login; production hides /openapi.json). QA app over-the-air update published 14:01 IST
+  ("App update" run 42782080960, channel staging, Android runtime b82e178e = build 5, update group
+  fcf5af22-221f-4f86-b9e4-80e9f731c71f). Next: the owner's phone test (QA-CHECKLIST G.0, G.7a-b, G.9, G.23-24, H.21a,
+  I.11, E.20, M.4a).
 - **QA feedback round 1 built, on `prod-ready` only (not on QA yet).** The owner tested the QA app (build 5) and
   asked for seven changes; all are in (section "QA feedback round 1" below): today's draft orders on New order, the
   scan screen's search at the top and a keyboard fix across the app, the app's own camera (straight to the crop

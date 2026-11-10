@@ -709,4 +709,5 @@ A code review of everything production would get (`main...prod-ready`) found 11 
   "pcs", WhatsApp hint and link previews, sales export (Excel, CSV), paper orders, plant names. Server changes:
   migrations 1101 (index) and 1102 (starter names), a new hourly worker job, XlsxWriter. The app part is
   JavaScript only (fingerprint unchanged): an over-the-air update to the QA app after the owner's go.
-- Next: on the owner's go, `staging` and `main` together, then the OTA to QA; the owner's phone test.
+- Released 10 Nov (owner's go): `staging` and `main` at 550e93b (QA 13:51 IST, production 13:53 IST after the
+  owner's approval), the OTA to the QA app published 14:01 IST. Next: the owner's phone test.
