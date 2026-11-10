@@ -3,10 +3,10 @@
 #   --python-version 3.12 --generate-hashes -o requirements-dev.lock)
 -r requirements.txt
 pytest==9.2.0
-ruff==0.17.3
+ruff==0.17.4
 pip-audit==2.10.1
 locust==2.47.0  # load tests (WP-11)
-uv==0.13.6  # makes the lock files
+uv==0.13.7  # makes the lock files
 # Only for MONGO_URL=mongomock and tests/devserver.py (in-memory database). The app uses PyMongo's async client.
 mongomock==4.3.0
 mongomock-motor==0.0.36
