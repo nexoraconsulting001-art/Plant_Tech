@@ -7,20 +7,20 @@ starlette==1.10.0
 uvicorn[standard]==0.54.0
 uvicorn-worker==0.4.0  # gunicorn's Uvicorn worker class (moved out of uvicorn.workers)
 gunicorn==26.2.0
-pydantic==2.14.2
+pydantic==2.14.3
 pydantic-settings==2.16.2
 python-dotenv==1.2.4
 python-multipart==0.0.33
 pymongo==4.19.0  # its asyncio client (AsyncMongoClient); Motor is no longer used
-anthropic==2.3.0
+anthropic==2.6.0
 httpx==0.28.1  # phone notifications through Expo (push.py); the Anthropic SDK and the TestClient use httpx2
 Pillow==13.0.0
-boto3==1.43.123
+boto3==1.43.126
 bcrypt==5.0.0
 PyJWT==2.15.1
-google-auth==2.62.0
+google-auth==2.62.1
 requests==2.34.2  # google-auth's transport for Google sign-in (auth.py)
-sentry-sdk[fastapi]==2.73.0
+sentry-sdk[fastapi]==2.74.0
 structlog==26.1.0
 asgi-correlation-id==5.0.1
 XlsxWriter==3.3.1  # the sales report's Excel export (routers/reports.py); no dependencies of its own
