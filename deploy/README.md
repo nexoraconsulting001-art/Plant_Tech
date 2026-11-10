@@ -92,6 +92,7 @@ shop, so it refuses to run on a shop without demo data.
 cd ~/Plant_Tech-staging/deploy
 docker compose exec web python demo_data.py seed --phone <owner phone>    # once (--force starts again)
 crontab -e   # add (the VM runs on UTC):  0 0 * * * bash /home/ubuntu/Plant_Tech-staging/deploy/demo-refresh.sh staging <owner phone> >> /home/ubuntu/nurserypos-demo.log 2>&1
+#              production (only into a new, empty shop):  2 0 * * * bash /home/ubuntu/Plant_Tech/deploy/demo-refresh.sh prod <owner phone> >> /home/ubuntu/nurserypos-demo-prod.log 2>&1
 docker compose exec web python demo_data.py remove --phone <owner phone>  # take the demo data out again
 ```
 

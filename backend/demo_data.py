@@ -7,9 +7,12 @@
 
 Orders follow a fixed plan per day, with shop hours 9 am to 8:30 pm and busier weekends; every order has a
 customer. Seeding and removing touch only rows marked demo=True. Seeding marks the shop itself as a demo shop
-(`demo: true` on the business; only this script sets it). Refresh moves the dates of everything in the shop (its
-own test bills too), so it runs only on a shop marked demo, and never with ENV=production (bills there are tax
-records). Seeding is refused in production too; removing demo rows is allowed everywhere.
+(`demo: true` on the business; only this script and migration 1002 set it, the app can't). Refresh moves the
+dates of everything in the shop (its own test bills too), so it runs only on a shop marked demo.
+Production (owner, 11 Nov 2026: the demo shop 9654346434 on production too, refreshed daily): bills there are tax
+records, so on production seeding goes only into a new, empty shop (nothing of its own: no products or bills that
+aren't demo rows), never into a shop that sells; the refresh then runs only on that marked shop, as everywhere.
+Removing demo rows is allowed everywhere.
 """
 import argparse
 import asyncio
@@ -244,9 +247,15 @@ class NotAllowed(RuntimeError):
     """The demo tools refuse this shop or this server."""
 
 
-def refuse_in_production(action: str):
-    if get_settings().is_production:
-        raise NotAllowed(f"demo {action} is blocked on production (ENV=production)")
+async def check_new_shop_on_production(db, business_id: str):
+    """On production, demo data goes only into a new, empty shop: one with products or bills of its own is a real
+    shop (its bills are tax records the daily refresh would move), so it is refused there."""
+    if not get_settings().is_production:
+        return
+    own = {"business_id": business_id, "demo": {"$ne": True}}
+    if await db.products.find_one(own, {"_id": 1}) or await db.invoices.find_one(own, {"_id": 1}):
+        raise NotAllowed("on production, demo data goes only into a new, empty shop: this shop has products or "
+                         "bills of its own")
 
 
 async def find_owner(db, phone: str) -> dict:
@@ -264,10 +273,10 @@ async def remove_demo(db, business_id: str):
 
 
 async def seed(db, phone: str, now: datetime | None = None, force: bool = False) -> dict:
-    refuse_in_production("seed")
     now = (now or now_ist()).astimezone(IST)
     shop = Shop(db, await find_owner(db, phone))
     bid = shop.bid
+    await check_new_shop_on_production(db, bid)
     if await db.products.find_one({"business_id": bid, "demo": True}):
         if not force:
             return {"seeded": False, "reason": "already has demo data (use --force to start again)"}
@@ -339,8 +348,8 @@ async def shift_dates(db, business_id: str, days: int) -> int:
 
 
 async def refresh(db, phone: str, today: date | None = None) -> dict:
-    """Daily: move all the shop's dates forward so its newest day of orders is today. Only on a demo shop."""
-    refuse_in_production("refresh")
+    """Daily: move all the shop's dates forward so its newest day of orders is today. Only on a shop marked demo
+    (production included: there only a new, empty shop can have been seeded and marked)."""
     today = today or now_ist().date()
     shop = Shop(db, await find_owner(db, phone))
     if not (await db.businesses.find_one({"id": shop.bid}, {"_id": 0, "demo": 1}) or {}).get("demo"):

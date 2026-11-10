@@ -370,11 +370,19 @@ def test_demo_refresh_guards(client, monkeypatch):
     shop.c.put("/api/business", headers=shop.h, json={"demo": False})  # the app cannot unset or set it
     assert shop.get("/api/business").json()["demo"] is True
 
+    # Production (owner, 11 Nov 2026): the marked demo shop is refreshed there too; a shop that sells never is,
+    # and demo data goes only into a new, empty shop
     monkeypatch.setattr(demo_data, "get_settings", lambda: SimpleNamespace(is_production=True))
-    with pytest.raises(demo_data.NotAllowed, match="production"):
-        run(demo_data.refresh(db(), "9811122334", today=date.today()))
-    with pytest.raises(demo_data.NotAllowed, match="production"):
-        run(demo_data.seed(db(), "9811122334"))
+    assert run(demo_data.refresh(db(), "9811122334", today=date.today()))["shifted_days"] == 0
+    real = Shop(client, phone="9811155667", name="Real")
+    real.product("Rose", 120, 5)
+    with pytest.raises(demo_data.NotAllowed, match="new, empty shop"):
+        run(demo_data.seed(db(), "9811155667"))
+    with pytest.raises(demo_data.NotAllowed, match="not a demo shop"):
+        run(demo_data.refresh(db(), "9811155667", today=date.today()))
+    assert real.get("/api/business").json().get("demo") is None
+    Shop(client, phone="9811155668", name="New Demo")
+    assert run(demo_data.seed(db(), "9811155668"))["seeded"] is True  # a new, empty shop: allowed
 
 
 def test_print_app_and_gstr1_show_the_same_gst(client):

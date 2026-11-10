@@ -159,6 +159,7 @@ with [age](https://github.com/FiloSottile/age) on the way to disk, copies it to 
    0 2 * * * /home/ubuntu/Plant_Tech/deploy/backup.sh >> /home/ubuntu/Plant_Tech/deploy/backup.log 2>&1
    30 2 * * * /home/ubuntu/Plant_Tech-staging/deploy/backup.sh >> /home/ubuntu/Plant_Tech-staging/deploy/backup.log 2>&1
    0 0 * * * bash /home/ubuntu/Plant_Tech-staging/deploy/demo-refresh.sh staging 9654346434 >> /home/ubuntu/nurserypos-demo.log 2>&1
+   2 0 * * * bash /home/ubuntu/Plant_Tech/deploy/demo-refresh.sh prod 9654346434 >> /home/ubuntu/nurserypos-demo-prod.log 2>&1
    ```
 7. Run `deploy/backup.sh` once by hand and check: a `.age` file in `deploy/backups/`, the same file in the bucket,
    the heartbeat green.
