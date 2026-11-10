@@ -288,8 +288,9 @@ Owner A adds employee W (Employees → Manage → Add employee). Test with W log
 | M.1 | Photo of a clear printed bill | Items listed; matched ones say "Adds to X", others "New product" | 1 | | |
 | M.2 | Photo of a plant or a laptop on Supplier bill | Alert "Not a supplier bill"; Enter items manually opens an empty item list; the photo is not kept | 1 | | |
 | M.3 | Edit a quantity and cost, remove a line, add a line | Saved values used; removed line not added | 1 | | |
-| M.4 | Save | Stock goes up; History shows "Supplier bill"; new products created at cost + the shop's profit margin (60% unless changed) | 1 | | |
-| M.5 | Employee saves a supplier bill | Stock added; cost prices NOT changed | 2 | | |
+| M.4 | Save | Stock goes up; History shows "Supplier bill"; new products get the selling price on their card (it starts at cost + the shop's profit margin, 60% unless changed, and follows the cost until typed) | 1 | | |
+| M.4a | Review: a product you already have ("Adds to Rose") | Its selling price box shows Rose's current price ("Current selling price"); type a new one: "Changes the price of Rose from ₹199"; after saving, Rose sells at the new price everywhere (new orders, Products); left as it was, the price stays | 1 | | |
+| M.5 | Employee (stock permission) saves a supplier bill | Stock added; selling prices typed on the bill are used, as in Edit product; cost prices NOT changed | 2 | | |
 | M.6 | A 3-page bill: Take photo, then Add page twice (or pick 3 from the gallery) | Three page thumbnails, each uploads (spinner, then done); "Read 3 pages" reads all items once, none repeated | 1 | | |
 | M.7 | Remove a page (×) before reading; a page whose upload failed | Removed page is gone; a failed page shows "Upload failed" and retries on tap; Read waits until all are uploaded | 2 | | |
 | M.8 | Pages from two different suppliers | Alert "Different suppliers"; the pages stay so the wrong one can be removed | 1 | | |

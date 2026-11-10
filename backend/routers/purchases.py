@@ -1,5 +1,10 @@
 """Supplier bills: add the items to stock (new items become new products, priced at cost plus the shop's profit %).
 
+Selling prices (owner, 10 Nov 2026): the app sends each item's `selling_price` from the bill's review screen. A new
+item gets it (none: cost plus the shop's profit %); a product already in the shop takes it as its price when it
+differs, as Edit product would (anyone with stock permission; the cost stays the owner's). Older apps send none, and
+existing products keep their price.
+
 Each bill is linked to one supplier record (found or made from the details on the bill) and keeps the
 photos of all its pages.
 
@@ -131,8 +136,11 @@ async def create_purchase(body: PurchaseIn, response: Response, user: dict = Dep
         for it, library_id in zip(body.items, library_ids):
             if it.product_id:
                 update: dict = {"$inc": {"stock": it.quantity}}
-                if owner:
-                    update["$set"] = {"cost_price": it.purchase_price, "supplier": supplier_name}
+                fields: dict = {"cost_price": it.purchase_price, "supplier": supplier_name} if owner else {}
+                if it.selling_price is not None:  # the price typed on the bill (unchanged: the same value again)
+                    fields.update(selling_price=it.selling_price, updated_at=now_iso())
+                if fields:
+                    update["$set"] = fields
                 p = await db.products.find_one_and_update({"id": it.product_id, "business_id": bid, "deleted_at": None},
                                                           update, projection={"_id": 0},
                                                           return_document=ReturnDocument.AFTER, session=session)

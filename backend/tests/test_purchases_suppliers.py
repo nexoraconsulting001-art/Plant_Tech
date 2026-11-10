@@ -1,4 +1,5 @@
-"""Supplier bills: stock, new products priced at the shop's profit %, one supplier record per supplier."""
+"""Supplier bills: stock, new products priced at the shop's profit % or the price typed on the bill, an existing
+product taking a changed price from the bill, one supplier record per supplier."""
 
 import db as db_module
 from conftest import Shop, photo_b64, run
@@ -24,6 +25,36 @@ def test_profit_percent_default_and_used_for_new_products(client):
     _bill(shop, [{"name": "Jade Plant", "quantity": 1, "purchase_price": 100}])
     assert {p["name"]: p for p in shop.get("/api/products").json()}["Jade Plant"]["selling_price"] == 140
     assert client.put("/api/business", headers=shop.h, json={"profit_percent": -5}).status_code == 422
+
+
+def test_selling_price_typed_on_the_bill(client, claude):
+    """Owner, 10 Nov 2026: the selling price is set on the bill. A new item gets it; a product already in the shop
+    takes a changed one as its price; none sent (older apps) or the same again leaves the price alone. An employee
+    with stock permission may set it, as in Edit product; the cost stays the owner's."""
+    shop = Shop(client)
+    rose = shop.product("Rose", 199, 5)
+    claude.invoice = {**claude.invoice, "items": [{"name": "Rose", "quantity": 10, "purchase_price": 90}]}
+    line = shop.post("/api/ai/scan-invoice", {"image_base64": photo_b64()}).json()["items"][0]
+    assert line["product_id"] == rose["id"] and line["current_price"] == 199  # the app starts the price box at it
+
+    def price(name):
+        return {p["name"]: p for p in shop.get("/api/products").json()}[name]
+
+    assert _bill(shop, [{"product_id": rose["id"], "name": "Rose", "quantity": 10, "purchase_price": 90,
+                         "selling_price": 220},
+                        {"name": "Areca Palm", "quantity": 2, "purchase_price": 100, "selling_price": 250}]).status_code == 200
+    assert price("Rose")["selling_price"] == 220 and price("Rose")["stock"] == 15 and price("Rose")["cost_price"] == 90
+    assert price("Areca Palm")["selling_price"] == 250  # not cost + 60%
+    _bill(shop, [{"product_id": rose["id"], "name": "Rose", "quantity": 1, "purchase_price": 95}])  # an older app
+    assert price("Rose")["selling_price"] == 220 and price("Rose")["cost_price"] == 95
+
+    _, worker = shop.worker()
+    r = client.post("/api/purchases", headers=worker, json={"supplier": "Green Farms", "items": [
+        {"product_id": rose["id"], "name": "Rose", "quantity": 1, "purchase_price": 10, "selling_price": 210}]})
+    assert r.status_code == 200, r.text
+    assert price("Rose")["selling_price"] == 210 and price("Rose")["cost_price"] == 95  # cost only by the owner
+    bill = shop.get("/api/purchases").json()[0]
+    assert bill["items"][0]["selling_price"] == 210  # kept with the bill
 
 
 def test_purchase_creates_supplier_once(client):

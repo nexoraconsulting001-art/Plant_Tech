@@ -40,7 +40,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 logger = logging.getLogger(__name__)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 SCAN = "scan"  # the allowance plant photos and bill pages share
-NAME_FIELDS = {"_id": 0, "id": 1, "name": 1, "botanical_name": 1, "other_names": 1, "library_id": 1}
+NAME_FIELDS = {"_id": 0, "id": 1, "name": 1, "botanical_name": 1, "other_names": 1, "library_id": 1, "selling_price": 1}
 ENTRY_NAMES = {"_id": 0, "id": 1, "name": 1, "name_hi": 1, "botanical": 1, "aliases": 1}
 RECOMMENDED = 4  # "in your stock" products shown with a scan's result
 
@@ -298,6 +298,7 @@ async def scan_invoice(body: InvoicePayload, user: dict = Depends(auth.require("
         match, _ = best_product(products, [it["name"]], names_of)
         it["product_id"] = match["id"] if match else None
         it["matched_name"] = match["name"] if match else None
+        it["current_price"] = match.get("selling_price", 0) if match else None  # the app starts the price box at it
     found = await suppliers.find_match(db, bid, result["supplier"], result["supplier_phone"], result["supplier_gstin"])
     result["supplier_match"] = suppliers.view(found) if found else None
     result["pages"] = pages

@@ -281,7 +281,6 @@
   "Quantity": "मात्रा",
   "Cost ₹ each": "ख़रीद दाम ₹ (एक का)",
   "Add an item": "सामान जोड़ें",
-  "New products are priced at cost plus {{p}}%. You can change any price later in Products.": "नए प्रोडक्ट का दाम ख़रीद दाम + {{p}}% रखा जाता है। कोई भी दाम बाद में प्रोडक्ट में बदल सकते हैं।",
   "Add to stock": "स्टॉक में जोड़ें",
   "Try again": "फिर कोशिश करें",
   "Remove page {{n}}": "पेज {{n}} हटाएँ",
@@ -917,5 +916,10 @@
   "The file could not be downloaded. Please try again.": "फ़ाइल डाउनलोड नहीं हो सकी। कृपया फिर से कोशिश करें।",
   "You can add up to {{n}} pages for one order.": "एक ऑर्डर के लिए ज़्यादा से ज़्यादा {{n}} पेज जोड़ सकते हैं।",
   "This order is too long to read in one go. Please photograph fewer pages at a time, or add the items one by one.": "यह ऑर्डर एक बार में पढ़ने के लिए बहुत लंबा है। एक बार में कम पेज की फ़ोटो लें, या सामान एक-एक करके जोड़ें।",
-  "This photo does not appear to show an order or a list of items. Please photograph the paper clearly, or add the items one by one.": "इस फ़ोटो में ऑर्डर या सामान की लिस्ट नहीं दिखती। काग़ज़ की साफ़ फ़ोटो लें, या सामान एक-एक करके जोड़ें।"
+  "This photo does not appear to show an order or a list of items. Please photograph the paper clearly, or add the items one by one.": "इस फ़ोटो में ऑर्डर या सामान की लिस्ट नहीं दिखती। काग़ज़ की साफ़ फ़ोटो लें, या सामान एक-एक करके जोड़ें।",
+  "Unchanged": "बिना बदलाव",
+  "Selling prices start at cost plus {{p}}% for new products. A changed price for a product you already have becomes its price.": "नए प्रोडक्ट का बिक्री दाम लागत पर {{p}}% जोड़कर शुरू होता है। पहले से मौजूद प्रोडक्ट का बदला हुआ दाम उसका नया दाम बन जाता है।",
+  "Cost plus {{p}}%": "लागत पर {{p}}% जोड़कर",
+  "Changes the price of {{name}} from {{old}}": "{{name}} का दाम {{old}} से बदल जाएगा",
+  "Current selling price": "अभी का बिक्री दाम"
 }

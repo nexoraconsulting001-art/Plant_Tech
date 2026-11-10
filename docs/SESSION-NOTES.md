@@ -271,6 +271,12 @@ else the shop's; everyone who sells sees all of today's drafts).
   botanical name equals another's is merged into it; products have "Other names" (up to 10, in the product form);
   the stock list sent to Claude carries a product's other names; matching uses every name of a product
   (`search.product_names`, `best_product`) in plant scans, supplier bills and paper orders.
+- **Supplier bill selling price** (owner, 10 Nov, after round 1; answers: typed, no MRP reading; the same people as
+  Edit product): each card on the bill's review has "Selling price ₹". A new item starts at cost plus the profit %
+  and follows the cost until typed; a product already in the shop starts at its current price (`current_price`
+  from `/ai/scan-invoice`), and a changed price becomes its price (`POST /purchases` sets `selling_price` on
+  existing products; older apps send none and nothing changes). Browser check: Snake Plant ₹349 → ₹449 typed on
+  the bill, a new item's ₹480 (cost 300 + 60%) followed the cost, then ₹599 typed and kept; both saved.
 - **Browser walkthrough (local server, fake Claude, Playwright):** drafts listed and opened; search mode at the
   top (box at y 70, camera panel hidden); Match found without stepper; "Search by name" opens the search with the
   box focused; no "pcs" on the order; paper order: Gulab matched Rose, paper price 180 with "Shop price ~~199~~",

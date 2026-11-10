@@ -25,9 +25,16 @@ import { formatCurrency, formatPhone, plural } from "@/src/format";
 import { CaptureResult, pickPages, takePhoto } from "@/src/hooks/useImageCapture";
 import { colors, radius, spacing } from "@/src/theme";
 
-type Item = { key: string; product_id: string | null; matched_name: string | null; name: string; quantity: string; purchase_price: string };
+// selling_price: typed on the bill (owner, 10 Nov 2026). A new item starts at cost plus the shop's profit % and follows
+// the cost until it is typed (priced); a product already in the shop starts at its current price, and a changed one
+// becomes its price.
+type Item = {
+  key: string; product_id: string | null; matched_name: string | null; name: string; quantity: string; purchase_price: string;
+  selling_price: string; current_price: number | null; priced: boolean;
+};
 const num = (v: string) => v.replace(/[^0-9.]/g, "");
-const blank = (key: string): Item => ({ key, product_id: null, matched_name: null, name: "", quantity: "1", purchase_price: "" });
+const blank = (key: string): Item => ({ key, product_id: null, matched_name: null, name: "", quantity: "1", purchase_price: "",
+  selling_price: "", current_price: null, priced: false });
 const MAX_PAGES = 5;
 const NO_SUPPLIER: SupplierChoice = { id: null, name: "", phone: "", address: "", gstin: "" };
 
@@ -37,6 +44,9 @@ export default function SupplierBill() {
   const toast = useToast();
   const qc = useQueryClient();
   const { user } = useAuth();
+  const profit = user?.business?.profit_percent ?? 60;
+  const gst = !!user?.business?.gst_registered;
+  const withMarkup = (cost: string) => (Number(cost) > 0 ? String(Math.round(Number(cost) * (1 + profit / 100))) : "");
   const [pages, setPages] = useState<Page[]>([]);
   const [reading, setReading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -80,8 +90,13 @@ export default function SupplierBill() {
         : { id: null, name: r.supplier || "", phone: r.supplier_phone || "", address: r.supplier_address || "", gstin: r.supplier_gstin || "" });
       setNumber(r.invoice_number || "");
       setDate(r.date || "");
-      setItems(r.items.map((it: any, i: number) => ({ key: `${i}`, product_id: it.product_id, matched_name: it.matched_name, name: it.name,
-        quantity: String(it.quantity || 1), purchase_price: String(it.purchase_price || "") })));
+      setItems(r.items.map((it: any, i: number) => {
+        const cost = String(it.purchase_price || "");
+        const current: number | null = it.product_id && it.current_price != null ? it.current_price : null;
+        return { key: `${i}`, product_id: it.product_id, matched_name: it.matched_name, name: it.name, quantity: String(it.quantity || 1),
+          purchase_price: cost, current_price: current, priced: !!it.product_id,
+          selling_price: it.product_id ? (current != null ? String(current) : "") : withMarkup(cost) };
+      }));
       if (!r.items.length) toast.show(t("No items could be read from this bill. Please add them below."), "info");
     } catch (e: any) {
       await refused(e);
@@ -112,6 +127,11 @@ export default function SupplierBill() {
   }
 
   const set = (key: string, patch: Partial<Item>) => setItems((list) => list!.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+  // A new item's selling price follows its cost until it is typed.
+  const setCost = (it: Item, v: string) => set(it.key, { purchase_price: v, ...(it.priced ? {} : { selling_price: withMarkup(v) }) });
+  // Sent only when there is one, and for a product already in the shop only when it changes its price.
+  const sellingPrice = (i: Item) => (i.selling_price === "" || (i.product_id && Number(i.selling_price) === i.current_price)
+    ? undefined : Number(i.selling_price));
   const valid = (items ?? []).filter((i) => i.name.trim() && Number(i.quantity) > 0);
   const total = valid.reduce((s, i) => s + Number(i.quantity) * (Number(i.purchase_price) || 0), 0);
 
@@ -129,7 +149,8 @@ export default function SupplierBill() {
         supplier: supplier.name.trim(), supplier_id: supplier.id, supplier_phone: supplier.phone, supplier_address: supplier.address,
         supplier_gstin: supplier.gstin, invoice_number: number, date, total,
         image_paths: pages.filter((p) => p.path).map((p) => p.path),
-        items: valid.map((i) => ({ product_id: i.product_id, name: i.name.trim(), quantity: Number(i.quantity), purchase_price: Number(i.purchase_price) || 0 })),
+        items: valid.map((i) => ({ product_id: i.product_id, name: i.name.trim(), quantity: Number(i.quantity), purchase_price: Number(i.purchase_price) || 0,
+          selling_price: sellingPrice(i) })),
       }, { headers: { "Idempotency-Key": saveKey.current } });
       toast.show(t("Stock added for {{items}}", { items: plural(valid.length, "1 item", "{{n}} items") }), "success");
       saved();
@@ -220,13 +241,17 @@ export default function SupplierBill() {
               placeholder={t("Item name")} autoCapitalize="words" />
             <View style={{ flexDirection: "row", gap: spacing.md }}>
               <Field style={{ flex: 1 }} label={t("Quantity")} value={it.quantity} onChangeText={(v) => set(it.key, { quantity: num(v) })} keyboardType="decimal-pad" />
-              <Field style={{ flex: 1 }} label={t("Cost ₹ each")} value={it.purchase_price} onChangeText={(v) => set(it.key, { purchase_price: num(v) })} keyboardType="decimal-pad" />
+              <Field style={{ flex: 1 }} label={t("Cost ₹ each")} value={it.purchase_price} onChangeText={(v) => setCost(it, num(v))} keyboardType="decimal-pad" />
             </View>
+            <Field label={gst ? t("Selling price ₹ (includes GST)") : t("Selling price ₹")} value={it.selling_price}
+              onChangeText={(v) => set(it.key, { selling_price: num(v), priced: true })} keyboardType="decimal-pad"
+              placeholder={it.product_id ? t("Unchanged") : "0"} testID={`sb-price-${it.name}`} />
+            <PriceNote it={it} profit={profit} />
           </View>
         ))}
         <Button title={t("Add an item")} icon="plus" variant="dashed" size="md"
           onPress={() => setItems((l) => [...l!, blank(`m${Date.now()}`)])} />
-        <T v="small">{t("New products are priced at cost plus {{p}}%. You can change any price later in Products.", { p: user?.business?.profit_percent ?? 60 })}</T>
+        <T v="small">{t("Selling prices start at cost plus {{p}}% for new products. A changed price for a product you already have becomes its price.", { p: profit })}</T>
       </KeyboardAwareScrollView>
       <BottomBar>
         <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -239,6 +264,20 @@ export default function SupplierBill() {
         onPick={(s) => setSupplier(s.id ? s : { ...supplier, id: null, name: s.name })} />
     </Screen>
   );
+}
+
+// Under the selling price: "Cost plus 60%" while a new item's price follows its cost; for a product already in the
+// shop, "Current selling price", or which price a typed one replaces.
+function PriceNote({ it, profit }: { it: Item; profit: number }) {
+  const { t } = useTranslation();
+  if (!it.product_id) return !it.priced && it.selling_price !== "" ? <T v="caption">{t("Cost plus {{p}}%", { p: profit })}</T> : null;
+  if (it.current_price == null) return null;
+  const changed = it.selling_price !== "" && Number(it.selling_price) !== it.current_price;
+  return changed ? (
+    <T v="caption" color={colors.amberInk} testID={`sb-price-change-${it.name}`}>
+      {t("Changes the price of {{name}} from {{old}}", { name: it.matched_name, old: formatCurrency(it.current_price) })}
+    </T>
+  ) : <T v="caption">{t("Current selling price")}</T>;
 }
 
 // The supplier of this bill: a saved one, or a new one with the details read from the bill (editable).
