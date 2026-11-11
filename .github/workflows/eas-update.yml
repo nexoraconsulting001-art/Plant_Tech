@@ -59,12 +59,12 @@ jobs:
         run: |
           npx --yes eas-cli@25.0.0 update --channel "$CHANNEL" --environment "$EAS_ENVIRONMENT" --message "$MESSAGE" --non-interactive
       # Crash reports name the right file and line for this update: its source maps go to Sentry (skipped until the
-      # environment has the secret SENTRY_AUTH_TOKEN and the variables SENTRY_ORG, SENTRY_PROJECT).
+      # environment has the secret SENTRY_AUTH_TOKEN and SENTRY_ORG, SENTRY_PROJECT as variables or secrets).
       - name: Source maps to Sentry
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG || secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT || secrets.SENTRY_PROJECT }}
         run: |
           if [ -z "$SENTRY_AUTH_TOKEN" ] || [ -z "$SENTRY_ORG" ] || [ -z "$SENTRY_PROJECT" ]; then
             echo "No Sentry settings in this environment: source maps not uploaded."; exit 0
