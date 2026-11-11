@@ -58,3 +58,15 @@ jobs:
           APP_VARIANT: ${{ inputs.channel == 'staging' && 'staging' || '' }}
         run: |
           npx --yes eas-cli@25.0.0 update --channel "$CHANNEL" --environment "$EAS_ENVIRONMENT" --message "$MESSAGE" --non-interactive
+      # Crash reports name the right file and line for this update: its source maps go to Sentry (skipped until the
+      # environment has the secret SENTRY_AUTH_TOKEN and the variables SENTRY_ORG, SENTRY_PROJECT).
+      - name: Source maps to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ] || [ -z "$SENTRY_ORG" ] || [ -z "$SENTRY_PROJECT" ]; then
+            echo "No Sentry settings in this environment: source maps not uploaded."; exit 0
+          fi
+          npx sentry-expo-upload-sourcemaps dist || echo "::warning::Sentry source map upload failed (the update itself is published)"
